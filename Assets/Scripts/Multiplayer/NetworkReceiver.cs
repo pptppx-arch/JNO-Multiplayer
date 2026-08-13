@@ -8,9 +8,8 @@ namespace Assets.Scripts.Multiplayer
 
     public class NetworkReceiver : IDisposable
     {
-        /// Receives framed metadata and payload from an active TCP connection.
-
-        public async Task<(string payload, string metadata)> ReceiveDataAsync(TcpClient client)
+        // Receives framed metadata and payload from an active TCP connection.
+        public async Task<(string data, string metadata)> ReceiveDataAsync(TcpClient client)
         {
             if (client == null || !client.Connected)
             {
@@ -55,7 +54,7 @@ namespace Assets.Scripts.Multiplayer
             }
         }
 
-        private (string payload, string metadata) UnpackPacket(byte[] buffer)
+        private (string data, string metadata) UnpackPacket(byte[] buffer)
         {
             using (MemoryStream ms = new MemoryStream(buffer))
             using (BinaryReader reader = new BinaryReader(ms))
@@ -63,10 +62,10 @@ namespace Assets.Scripts.Multiplayer
                 int metaLength = reader.ReadInt32();
                 string metadata = metaLength > 0 ? Encoding.UTF8.GetString(reader.ReadBytes(metaLength)) : string.Empty;
 
-                int payloadLength = reader.ReadInt32();
-                string payload = payloadLength > 0 ? Encoding.UTF8.GetString(reader.ReadBytes(payloadLength)) : string.Empty;
+                int dataLength = reader.ReadInt32();
+                string data = dataLength > 0 ? Encoding.UTF8.GetString(reader.ReadBytes(dataLength)) : string.Empty;
 
-                return (payload, metadata);
+                return (data, metadata);
             }
         }
 

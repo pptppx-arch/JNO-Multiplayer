@@ -9,7 +9,6 @@ namespace Assets.Scripts.Multiplayer
     public class NetworkSender : IDisposable
     {
         // Connects to host, sends framed payload, and returns the active TcpClient for ongoing connection management.
-
         public const int DefaultPort = 25555;
         public async Task<(bool success, TcpClient client)> ConnectAndSendDataAsync(string ipAddress, string data, string metadata, int port = DefaultPort)
         {
@@ -52,25 +51,25 @@ namespace Assets.Scripts.Multiplayer
             }
         }
 
-        public static byte[] BuildPacket(string payload, string metadata)
+        public static byte[] BuildPacket(string data, string metadata)
         {
             byte[] metaBytes = Encoding.UTF8.GetBytes(metadata ?? string.Empty);
-            byte[] payloadBytes = Encoding.UTF8.GetBytes(payload ?? string.Empty);
+            byte[] dataBytes = Encoding.UTF8.GetBytes(data ?? string.Empty);
 
             using (MemoryStream ms = new MemoryStream())
             using (BinaryWriter writer = new BinaryWriter(ms))
             {
                 // Calculate and write TOTAL payload length header [4 Bytes]
-                int totalContentLength = 4 + metaBytes.Length + 4 + payloadBytes.Length;
+                int totalContentLength = 4 + metaBytes.Length + 4 + dataBytes.Length;
                 writer.Write(totalContentLength);
 
                 // Write Metadata length and bytes
                 writer.Write(metaBytes.Length);
                 if (metaBytes.Length > 0) writer.Write(metaBytes);
 
-                // Write Payload length and bytes
-                writer.Write(payloadBytes.Length);
-                if (payloadBytes.Length > 0) writer.Write(payloadBytes);
+                // Write Data length and bytes
+                writer.Write(dataBytes.Length);
+                if (dataBytes.Length > 0) writer.Write(dataBytes);
 
                 return ms.ToArray();
             }

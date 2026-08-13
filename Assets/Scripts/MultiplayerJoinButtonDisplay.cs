@@ -1,13 +1,16 @@
 namespace Assets.Scripts.Ui.Designer
 {
+    using Assets.Scripts.Flight;
     using Assets.Scripts.Multiplayer;
     using ModApi.Common;
     using ModApi.Ui;
+    using System.Xml.Linq;
     using UnityEngine;
 
     public class MultiplayerJoinButtonDisplay : MonoBehaviour
     {
         private IXmlLayoutController _controller;
+        public string craftXml;
 
         public void OnLayoutRebuilt(IXmlLayoutController xmlLayoutController)
         {
@@ -43,7 +46,7 @@ namespace Assets.Scripts.Ui.Designer
 
             Mod.Log($"[UI] Connecting to {host}:{port}");
 
-            ConnectionHandler.TryConnect(host, port, false);
+            TryConnect(host, port);
         }
 
         public void OnHostClicked()
@@ -60,7 +63,14 @@ namespace Assets.Scripts.Ui.Designer
 
             Mod.Log($"[UI] Hosting on port {port}");
 
-            ConnectionHandler.TryConnect(null, port, true);
+            TryConnect(null, port);
+        }
+
+        public void TryConnect(string host, int port)
+        {
+            var designer = Game.Instance.Designer;
+            designer.BeginFlight();
+            if (host == null) ServerHost.Start(port); else ClientConnection.Connect(host, port);
         }
     }
 }
