@@ -1,0 +1,20 @@
+<XmlLayout xmlns="http://www.w3schools.com" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="..\..\..\ModTools\UI\XmlLayout.xsd">
+	<Panel class="dialog panel-default" width="420" height="250" rectAlignment="UpperCenter" padding="15">
+		<VerticalLayout spacing="15">
+			<Text text="Multiplayer Room" class="dialog-title" height="30" />
+			<InputField id="ipInput" placeholderText="Enter Server IP..." height="40" />
+			<InputField id="portInput" placeholderText="Port (25555)" height="40" />
+			<HorizontalLayout height="40" spacing="10">
+				<Button id="connectButton" class="btn-primary" width="120">
+					<Text text="Connect" />
+				</Button>
+				<Button id="hostButton" class="btn-primary" width="120">
+					<Text text="Host" />
+				</Button>
+				<Button id="cancelButton" class="btn-secondary" width="120">
+					<Text text="Cancel" />
+				</Button>
+			</HorizontalLayout>
+		</VerticalLayout>
+	</Panel>
+</XmlLayout>

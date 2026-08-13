@@ -1,0 +1,8 @@
+{
+	"name": "JNO Multiplayer",
+	"references": [
+		"UnityEngine.UI",
+		"Unity.TextMeshPro",
+		"Unity.Mathematics"
+	]
+}
