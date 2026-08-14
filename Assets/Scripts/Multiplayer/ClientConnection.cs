@@ -1,21 +1,32 @@
 namespace Assets.Scripts.Multiplayer
 {
     using Assets.Scripts.Flight;
+    using Assets.Scripts.Flight.Sim;
+    using Assets.Scripts.Multiplayer.CraftData;
     using System;
-    using System.IO;
-    using System.IO.Compression;
     using System.Net.Sockets;
     using System.Threading.Tasks;
-    using System.Xml.Linq;
 
     public static class ClientConnection
     {
         public static TcpClient ActiveClient { get; private set; }
-        public static int LocalClientId { get; private set; }
+        public static int LocalClientId { get; private set; } = -1;
+        public static bool IsConnected => ActiveClient != null && ActiveClient.Connected;
 
-        //Initiates a connection to the server and starts listening for incoming data.
+        public static void SetLocalClientId(int id)
+        {
+            LocalClientId = id;
+        }
+
+        #region Connection Lifecycle
         public static async void Connect(string host, int port)
         {
+            if (IsConnected)
+            {
+                Mod.LogWarning("[ClientConnection] Already connected to a server.");
+                return;
+            }
+
             var networkSender = new NetworkSender();
             var (sentSuccess, client) = await networkSender.ConnectAndSendDataAsync(host, string.Empty, "CONNECT", port);
 
@@ -27,11 +38,36 @@ namespace Assets.Scripts.Multiplayer
             }
             else
             {
-                Mod.LogError("[ClientConnection] Failed to connect.");
+                Mod.LogError("[ClientConnection] Failed to connect to server.");
             }
         }
 
-        //Listens for incoming data from the server.
+        public static void Disconnect()
+        {
+            if (ActiveClient != null)
+            {
+                try
+                {
+                    ActiveClient.Close();
+                    ActiveClient.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Mod.LogError($"[ClientConnection] Error during disconnect: {ex.Message}");
+                }
+                finally
+                {
+                    ActiveClient = null;
+                    LocalClientId = -1;
+                    CraftRegistry.ClearAll();
+                    Mod.Log("[ClientConnection] Disconnected from server.");
+                }
+            }
+        }
+        #endregion
+
+
+        #region Network Loop
         private static async Task StartListeningAsync(TcpClient client)
         {
             try
@@ -43,86 +79,95 @@ namespace Assets.Scripts.Multiplayer
                         var (data, metadata) = await receiver.ReceiveDataAsync(client);
                         if (data == null || metadata == null) break;
 
-                        switch (metadata)
-                        {
-                            case "CONNECT_ACCEPTED":
-                                if (int.TryParse(data, out int assignedId))
-                                {
-                                    LocalClientId = assignedId;
-                                    Mod.Log($"[ClientConnection] Connection accepted, assigned Client ID: {LocalClientId}");
-                                    await SendCraftData();
-                                }
-                                else
-                                {
-                                    Mod.LogError("[ClientConnection] Failed to parse assigned Client ID. Disconnecting from server now.");
-                                    client.Close();
-                                }
-                                break;
-
-                            case "UPDATE_CRAFT_DATA":
-                                UpdateCraftData();
-                                break;
-
-                            default:
-                                Mod.LogWarning($"[ClientConnection] Received unhandled packet type: '{metadata}'");
-                                break;
-                        }
+                        await ProcessIncomingPacket(data, metadata);
                     }
                 }
-            }
-            finally
-            {
-                client.Close();
-                ActiveClient = null;
-            }
-        }
-
-
-        #region Deal with lots of stuff
-        public static async Task SendCraftData()
-        {
-            var flightScene = FlightSceneScript.Instance;
-            var nodeId = flightScene.CraftNode.NodeId;
-            XElement xml = flightScene.FlightState.LoadCraftXml(nodeId);
-            string craftData = xml.ToString(SaveOptions.DisableFormatting);
-
-            if (ActiveClient == null || !ActiveClient.Connected)
-            {
-                Mod.LogError("[ClientConnection] Cannot send craft data: ActiveClient is null or disconnected.");
-                return;
-            }
-
-            try
-            {
-                byte[] rawBytes = System.Text.Encoding.UTF8.GetBytes(craftData);
-                byte[] compressedBytes;
-
-                using (MemoryStream outputStream = new MemoryStream())
-                {
-                    using (GZipStream gzipStream = new GZipStream(outputStream, CompressionMode.Compress))
-                    {
-                        gzipStream.Write(rawBytes, 0, rawBytes.Length);
-                    }
-                    compressedBytes = outputStream.ToArray();
-                }
-
-                string base64Craft = Convert.ToBase64String(compressedBytes);
-                byte[] packetBytes = NetworkSender.BuildPacket(base64Craft, "CLIENT_CRAFT_DATA");
-
-                NetworkStream stream = ActiveClient.GetStream();
-                await stream.WriteAsync(packetBytes, 0, packetBytes.Length);
-                await stream.FlushAsync();
-
-                Mod.Log("[ClientConnection] Craft XML data sent to host.");
             }
             catch (Exception ex)
             {
-                Mod.LogError($"[ClientConnection] Failed to send craft data: {ex.Message}");
+                Mod.LogError($"[ClientConnection] Listening loop error: {ex.Message}");
+            }
+            finally
+            {
+                Disconnect();
             }
         }
-        public static async void UpdateCraftData()
-        {
 
+        private static async Task ProcessIncomingPacket(string data, string metadata)
+        {
+            try
+            {
+                // Relay spawn packet: "SPAWN_CRAFT:<clientId>"
+                if (metadata.StartsWith("SPAWN_CRAFT:"))
+                {
+                    if (int.TryParse(metadata.Substring("SPAWN_CRAFT:".Length), out int remoteClientId))
+                    {
+                        Mod.Log($"[ClientConnection] Received craft XML relay for Client ID {remoteClientId}.");
+                        await ReceiveCraftData.ProcessAndSpawnAsync(remoteClientId, data);
+                    }
+                    return;
+                }
+
+                switch (metadata)
+                {
+                    case "CONNECT_ACCEPTED":
+                        if (int.TryParse(data, out int assignedId))
+                        {
+                            LocalClientId = assignedId;
+                            Mod.Log($"[ClientConnection] Connection accepted! Assigned Client ID: {LocalClientId}");
+
+                            // Register local craft in registry
+                            var localCraft = FlightSceneScript.Instance?.CraftNode as CraftNode;
+                            CraftRegistry.RegisterCraft(LocalClientId, localCraft);
+
+                            await SendCraftData();
+                        }
+                        else
+                        {
+                            Mod.LogError("[ClientConnection] Failed to parse assigned Client ID. Disconnecting...");
+                            Disconnect();
+                        }
+                        break;
+
+                    case "CLIENT_DISCONNECTED":
+                        if (int.TryParse(data, out int disconnectedId))
+                        {
+                            CraftRegistry.DespawnCraft(disconnectedId);
+                        }
+                        break;
+
+                    case "UPDATE_CRAFT_DATA":
+                        UpdateCraftData(data);
+                        break;
+
+                    default:
+                        Mod.LogWarning($"[ClientConnection] Received unhandled packet type: '{metadata}'");
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Mod.LogError($"[ClientConnection] Error processing packet '{metadata}': {ex.Message}");
+            }
+        }
+        #endregion
+
+
+        #region Craft XML Transmission
+        public static async Task SendCraftData()
+        {
+            if (!IsConnected)
+            {
+                Mod.LogError("[ClientConnection] Cannot send craft data: Not connected.");
+                return;
+            }
+
+            await CraftData.SendCraftData.SendLocalCraftAsync(ActiveClient, "CLIENT_CRAFT_DATA");
+        }
+
+        public static void UpdateCraftData(string data)
+        {
+            // Placeholder for structural modifications (e.g. staging / part separation)
         }
         #endregion
     }

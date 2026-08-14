@@ -2,34 +2,32 @@ namespace Assets.Scripts.Multiplayer
 {
     using Assets.Scripts.Flight;
     using Assets.Scripts.Flight.Sim;
-    using ModApi.Craft;
-    using ModApi.State;
+    using Assets.Scripts.Multiplayer.CraftData;
     using System;
     using System.Collections.Generic;
-    using System.IO;
-    using System.IO.Compression;
     using System.Net;
     using System.Net.Sockets;
     using System.Threading.Tasks;
-    using System.Xml.Linq;
-    using UnityEngine;
 
     public class ClientSession
     {
         public int Id { get; set; }
         public TcpClient Client { get; set; }
         public string CraftXml { get; set; }
+        public bool IsHost => Client == null;
     }
 
     public static class ServerHost
     {
+        public const int HostClientId = 0;
+
         private static TcpListener _listener;
         private static bool _isHosting;
 
         public static List<ClientSession> Sessions { get; } = new List<ClientSession>();
-        private static int _nextClientId = 0;
+        private static int _nextClientId = HostClientId;
 
-        // Starts the host TCP server and begins listening for incoming connections.
+        #region Server Lifecycle
         public static async void Start(int port)
         {
             if (_isHosting)
@@ -44,7 +42,26 @@ namespace Assets.Scripts.Multiplayer
                 _listener.Start();
                 _isHosting = true;
 
-                Mod.Log($"[ServerHost] Server listening on port {port}...");
+                // 1. Set local Host ID = 0
+                ClientConnection.SetLocalClientId(HostClientId);
+
+                // 2. Register local Host craft into registry
+                var localCraft = FlightSceneScript.Instance?.CraftNode as CraftNode;
+                CraftRegistry.RegisterCraft(HostClientId, localCraft);
+
+                // 3. Register local Host session
+                lock (Sessions)
+                {
+                    Sessions.Clear();
+                    Sessions.Add(new ClientSession
+                    {
+                        Id = HostClientId,
+                        Client = null,
+                        CraftXml = string.Empty
+                    });
+                }
+
+                Mod.Log($"[ServerHost] Server listening on port {port}... Registered Host as ID {HostClientId}");
 
                 while (_isHosting)
                 {
@@ -61,8 +78,6 @@ namespace Assets.Scripts.Multiplayer
             }
         }
 
-
-        #region Stops the host TCP server and cleans up resources.
         public static void Stop()
         {
             if (!_isHosting)
@@ -74,7 +89,6 @@ namespace Assets.Scripts.Multiplayer
             Mod.Log("[ServerHost] Terminating server...");
             _isHosting = false;
 
-            // 1. Stop listening for new connections
             try
             {
                 _listener?.Stop();
@@ -85,7 +99,6 @@ namespace Assets.Scripts.Multiplayer
                 Mod.LogError($"[ServerHost] Error stopping listener: {ex.Message}");
             }
 
-            // 2. Disconnect and cleanup all active client sessions
             lock (Sessions)
             {
                 foreach (var session in Sessions)
@@ -106,15 +119,16 @@ namespace Assets.Scripts.Multiplayer
                 Sessions.Clear();
             }
 
+            CraftRegistry.ClearAll();
             Mod.Log("[ServerHost] Server stopped and cleaned up successfully.");
         }
         #endregion
 
 
-        // Listens for incoming data from clients.
+        #region Network Loop
         private static async Task HandleClientAsync(TcpClient client)
         {
-            Mod.Log("[ServerHost] Client connected.");
+            Mod.Log("[ServerHost] Remote client connected.");
 
             try
             {
@@ -132,7 +146,7 @@ namespace Assets.Scripts.Multiplayer
                                 break;
 
                             case "CLIENT_CRAFT_DATA":
-                                await SpawnClientCraft(client, data);
+                                await HandleClientCraftData(client, data);
                                 break;
 
                             case "INPUTS":
@@ -152,25 +166,30 @@ namespace Assets.Scripts.Multiplayer
             }
             finally
             {
-                // Remove session tracking when client disconnects
-                lock (Sessions)
+                int clientId = GetClientId(client);
+                if (clientId != -1)
                 {
-                    Sessions.RemoveAll(s => s.Client == client);
+                    lock (Sessions)
+                    {
+                        Sessions.RemoveAll(s => s.Client == client);
+                    }
+
+                    // Despawn on Host and notify all remaining clients
+                    CraftRegistry.DespawnCraft(clientId);
+                    Broadcast(clientId.ToString(), "CLIENT_DISCONNECTED");
                 }
+
                 client.Close();
-                Mod.Log("[ServerHost] Client disconnected.");
+                Mod.Log($"[ServerHost] Client ID {clientId} disconnected.");
             }
         }
 
-
-        #region Handles client data
         private static async Task HandleConnect(TcpClient client)
         {
             try
             {
                 _nextClientId++;
 
-                // Create a new session for the connected client
                 lock (Sessions)
                 {
                     Sessions.Add(new ClientSession
@@ -187,95 +206,116 @@ namespace Assets.Scripts.Multiplayer
                 await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
                 await stream.FlushAsync();
 
-                Mod.Log($"Connection accepted and response sent to client with client ID: {_nextClientId}");
+                Mod.Log($"[ServerHost] Connection accepted for Client ID: {_nextClientId}");
             }
             catch (Exception ex)
             {
                 Mod.LogError($"[ServerHost] Failed to send CONNECT_ACCEPTED: {ex.Message}");
             }
         }
-        private static async Task SpawnClientCraft(TcpClient client, string data)
+        #endregion
+
+
+        #region Craft Sync Logic
+        private static async Task HandleClientCraftData(TcpClient client, string data)
         {
+            int clientId = GetClientId(client);
+            if (clientId == -1) return;
+
+            // 1. Save craft XML into session memory
+            lock (Sessions)
+            {
+                var session = Sessions.Find(s => s.Id == clientId);
+                if (session != null)
+                {
+                    session.CraftXml = data;
+                }
+            }
+
+            // 2. Forward payload to ReceiveCraftData for decompression & spawning on Host
+            await ReceiveCraftData.ProcessAndSpawnAsync(clientId, data);
+
+            // 3. Ensure Host's own craft XML is cached in Session 0
+            UpdateHostCraftXmlIfNeeded();
+
+            // 4. Catch up new client with all existing crafts in session (Host + other players)
+            lock (Sessions)
+            {
+                foreach (var session in Sessions)
+                {
+                    if (session.Id != clientId && !string.IsNullOrEmpty(session.CraftXml))
+                    {
+                        _ = SendCraftData.SendRawPayloadAsync(client, session.CraftXml, $"SPAWN_CRAFT:{session.Id}");
+                    }
+                }
+            }
+
+            // 5. Broadcast new client's craft XML to all other connected clients
+            Broadcast(data, $"SPAWN_CRAFT:{clientId}", excludeClientId: clientId);
+        }
+
+        private static void UpdateHostCraftXmlIfNeeded()
+        {
+            lock (Sessions)
+            {
+                var hostSession = Sessions.Find(s => s.Id == HostClientId);
+                if (hostSession != null && string.IsNullOrEmpty(hostSession.CraftXml))
+                {
+                    string hostXml = SendCraftData.GetLocalCraftXmlCompressed();
+                    if (!string.IsNullOrEmpty(hostXml))
+                    {
+                        hostSession.CraftXml = hostXml;
+                        Mod.Log("[ServerHost] Cached Host Craft XML to Session 0.");
+                    }
+                }
+            }
+        }
+        #endregion
+
+
+        #region Broadcast Helpers
+        private static async Task SendPacketAsync(TcpClient client, string data, string metadata)
+        {
+            if (client == null || !client.Connected) return;
+
             try
             {
-                // 1. Find active session for this client
-                ClientSession session;
-                lock (Sessions)
-                {
-                    session = Sessions.Find(s => s.Client == client);
-                }
-
-                if (session == null)
-                {
-                    Mod.LogError("[ServerHost] Received craft data from an untracked client.");
-                    return;
-                }
-
-                // 2. Decompress Base64 / GZip string if compressed, or use directly if raw XML
-                string xmlString = data;
-                if (!xmlString.TrimStart().StartsWith("<"))
-                {
-                    try
-                    {
-                        byte[] compressedBytes = Convert.FromBase64String(data);
-                        using (MemoryStream ms = new MemoryStream(compressedBytes))
-                        using (GZipStream gzip = new GZipStream(ms, CompressionMode.Decompress))
-                        using (StreamReader reader = new StreamReader(gzip, System.Text.Encoding.UTF8))
-                        {
-                            xmlString = reader.ReadToEnd();
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Mod.LogError($"[ServerHost] Failed to decompress craft XML for Client {session.Id}: {ex.Message}");
-                        return;
-                    }
-                }
-
-                // 3. Store craft XML in session
-                session.CraftXml = xmlString;
-                Mod.Log($"[ServerHost] Received valid craft XML for Client {session.Id}. Spawning craft...");
-
-                // 4. Ensure FlightScene is loaded before attempting to spawn
-                var flightScene = FlightSceneScript.Instance.CraftNode;
-                if (flightScene == null || flightScene == null)
-                {
-                    Mod.LogWarning("[ServerHost] Flight scene or host craft not ready. Skipping craft spawn.");
-                    return;
-                }
-
-                // 5. Parse XML & Load CraftData via Juno API
-                XElement xml = XElement.Parse(xmlString);
-                CraftData craftData = Game.Instance.CraftLoader.LoadCraftImmediate(xml);
-
-                // 6. Create a dynamic LaunchLocation offset slightly from host to prevent collision
-                Vector3d spawnPosition = flightScene.Position + new Vector3d(50, 0, 0);
-
-                LaunchLocation launchLocation = LaunchLocation.CreateLaunchLocation(
-                    $"Client_{session.Id}_Craft",
-                    flightScene.Parent,
-                    spawnPosition,
-                    flightScene.Velocity,
-                    flightScene.Heading,
-                    flightScene.ReferenceFrame,
-                    LaunchLocationType.SurfaceLockedGround
-                );
-
-                // 7. Spawn craft into the game world
-                CraftNode clientCraftNode = FlightSceneScript.Instance.SpawnCraft(session.Client.ToString(),craftData, launchLocation);
-                Mod.Log($"[ServerHost] Successfully spawned craft for Client {session.Client}.");
+                byte[] packetBytes = NetworkSender.BuildPacket(data, metadata);
+                NetworkStream stream = client.GetStream();
+                await stream.WriteAsync(packetBytes, 0, packetBytes.Length);
+                await stream.FlushAsync();
             }
             catch (Exception ex)
             {
-                Mod.LogError($"[ServerHost] Error spawning client craft: {ex.Message}");
+                Mod.LogError($"[ServerHost] Send packet error ('{metadata}'): {ex.Message}");
             }
-
-            await Task.CompletedTask;
         }
-        private static void HandleClientInputs(TcpClient client, string data)
+
+        public static void Broadcast(string data, string metadata, int excludeClientId = -1)
         {
-
+            lock (Sessions)
+            {
+                foreach (var session in Sessions)
+                {
+                    if (session.Id == excludeClientId) continue;
+                    if (session.Client != null && session.Client.Connected)
+                    {
+                        _ = SendPacketAsync(session.Client, data, metadata);
+                    }
+                }
+            }
         }
+
+        private static int GetClientId(TcpClient client)
+        {
+            lock (Sessions)
+            {
+                var session = Sessions.Find(s => s.Client == client);
+                return session != null ? session.Id : -1;
+            }
+        }
+
+        private static void HandleClientInputs(TcpClient client, string data) { }
         #endregion
     }
 }
