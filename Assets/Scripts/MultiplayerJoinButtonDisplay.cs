@@ -1,10 +1,8 @@
 namespace Assets.Scripts.Ui.Designer
 {
-    using Assets.Scripts.Flight;
     using Assets.Scripts.Multiplayer;
     using ModApi.Common;
     using ModApi.Ui;
-    using System.Xml.Linq;
     using UnityEngine;
 
     public class MultiplayerJoinButtonDisplay : MonoBehaviour
@@ -70,7 +68,8 @@ namespace Assets.Scripts.Ui.Designer
         {
             var designer = Game.Instance.Designer;
             designer.BeginFlight();
-            if (host == null) ServerHost.Start(port); else ClientConnection.Connect(host, port);
+            if (host == null) ServerConnection.Start(port); else ClientConnection.Connect(host, port);
+            ModHelper.Connect(host, 4444);
         }
     }
 }

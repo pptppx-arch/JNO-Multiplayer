@@ -1,6 +1,5 @@
 namespace Assets.Scripts.Multiplayer.CraftData
 {
-    using Assets.Scripts.Multiplayer.Telemetry;
     using System;
     using System.IO;
     using System.IO.Compression;

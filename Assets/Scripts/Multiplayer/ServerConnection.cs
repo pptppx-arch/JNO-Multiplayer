@@ -2,7 +2,8 @@ namespace Assets.Scripts.Multiplayer
 {
     using Assets.Scripts.Flight;
     using Assets.Scripts.Flight.Sim;
-    using Assets.Scripts.Multiplayer.CraftData;
+    using Multiplayer.CraftData;
+    using Multiplayer.Telemetry;
     using System;
     using System.Collections.Generic;
     using System.Net;
@@ -17,7 +18,7 @@ namespace Assets.Scripts.Multiplayer
         public bool IsHost => Client == null;
     }
 
-    public static class ServerHost
+    public static class ServerConnection
     {
         public const int HostClientId = 0;
 
@@ -132,7 +133,7 @@ namespace Assets.Scripts.Multiplayer
 
             try
             {
-                using (var receiver = new NetworkReceiver())
+                using (var receiver = new TcpNetworkReceiver())
                 {
                     while (_isHosting && client.Connected)
                     {
@@ -147,10 +148,6 @@ namespace Assets.Scripts.Multiplayer
 
                             case "CLIENT_CRAFT_DATA":
                                 await HandleClientCraftData(client, data);
-                                break;
-
-                            case "INPUTS":
-                                HandleClientInputs(client, data);
                                 break;
 
                             default:
@@ -252,6 +249,9 @@ namespace Assets.Scripts.Multiplayer
 
             // 5. Broadcast new client's craft XML to all other connected clients
             Broadcast(data, $"SPAWN_CRAFT:{clientId}", excludeClientId: clientId);
+
+            //TelemetryHost.StartTelemetry(client);
+            Broadcast(null, "TELEMETRY_START", -1);
         }
 
         private static void UpdateHostCraftXmlIfNeeded()
@@ -314,8 +314,6 @@ namespace Assets.Scripts.Multiplayer
                 return session != null ? session.Id : -1;
             }
         }
-
-        private static void HandleClientInputs(TcpClient client, string data) { }
         #endregion
     }
 }

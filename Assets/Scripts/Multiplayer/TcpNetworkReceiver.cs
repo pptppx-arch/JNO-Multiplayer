@@ -6,7 +6,7 @@ namespace Assets.Scripts.Multiplayer
     using System.Text;
     using System.Threading.Tasks;
 
-    public class NetworkReceiver : IDisposable
+    public class TcpNetworkReceiver : IDisposable
     {
         // Receives framed metadata and payload from an active TCP connection.
         public async Task<(string data, string metadata)> ReceiveDataAsync(TcpClient client)

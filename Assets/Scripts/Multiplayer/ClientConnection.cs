@@ -3,6 +3,7 @@ namespace Assets.Scripts.Multiplayer
     using Assets.Scripts.Flight;
     using Assets.Scripts.Flight.Sim;
     using Assets.Scripts.Multiplayer.CraftData;
+    using Assets.Scripts.Multiplayer.Telemetry;
     using System;
     using System.Net.Sockets;
     using System.Threading.Tasks;
@@ -12,6 +13,8 @@ namespace Assets.Scripts.Multiplayer
         public static TcpClient ActiveClient { get; private set; }
         public static int LocalClientId { get; private set; } = -1;
         public static bool IsConnected => ActiveClient != null && ActiveClient.Connected;
+        public static string hostIp;
+        public static int TcpPort { get; private set; }
 
         public static void SetLocalClientId(int id)
         {
@@ -21,6 +24,9 @@ namespace Assets.Scripts.Multiplayer
         #region Connection Lifecycle
         public static async void Connect(string host, int port)
         {
+            hostIp = host;
+            TcpPort = port;
+
             if (IsConnected)
             {
                 Mod.LogWarning("[ClientConnection] Already connected to a server.");
@@ -60,6 +66,7 @@ namespace Assets.Scripts.Multiplayer
                     ActiveClient = null;
                     LocalClientId = -1;
                     CraftRegistry.ClearAll();
+                    TelemetryClient.StopTelemetry();
                     Mod.Log("[ClientConnection] Disconnected from server.");
                 }
             }
@@ -72,7 +79,7 @@ namespace Assets.Scripts.Multiplayer
         {
             try
             {
-                using (var receiver = new NetworkReceiver())
+                using (var receiver = new TcpNetworkReceiver())
                 {
                     while (client.Connected)
                     {
@@ -120,7 +127,7 @@ namespace Assets.Scripts.Multiplayer
                             var localCraft = FlightSceneScript.Instance?.CraftNode as CraftNode;
                             CraftRegistry.RegisterCraft(LocalClientId, localCraft);
 
-                            await SendCraftData();
+                            await CraftData.SendCraftData.SendLocalCraftAsync(ActiveClient, "CLIENT_CRAFT_DATA");
                         }
                         else
                         {
@@ -136,12 +143,13 @@ namespace Assets.Scripts.Multiplayer
                         }
                         break;
 
-                    case "UPDATE_CRAFT_DATA":
-                        UpdateCraftData(data);
+                    case "TELEMETRY_START":
+                        int udpPort = TcpPort + 1;
+                        TelemetryClient.StartTelemetry(hostIp, udpPort, LocalClientId);
                         break;
 
                     default:
-                        Mod.LogWarning($"[ClientConnection] Received unhandled packet type: '{metadata}'");
+                        Mod.LogWarning($"[ClientConnection] Unknown packet type received: {metadata}");
                         break;
                 }
             }
@@ -149,25 +157,6 @@ namespace Assets.Scripts.Multiplayer
             {
                 Mod.LogError($"[ClientConnection] Error processing packet '{metadata}': {ex.Message}");
             }
-        }
-        #endregion
-
-
-        #region Craft XML Transmission
-        public static async Task SendCraftData()
-        {
-            if (!IsConnected)
-            {
-                Mod.LogError("[ClientConnection] Cannot send craft data: Not connected.");
-                return;
-            }
-
-            await CraftData.SendCraftData.SendLocalCraftAsync(ActiveClient, "CLIENT_CRAFT_DATA");
-        }
-
-        public static void UpdateCraftData(string data)
-        {
-            // Placeholder for structural modifications (e.g. staging / part separation)
         }
         #endregion
     }

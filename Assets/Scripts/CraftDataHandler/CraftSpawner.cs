@@ -1,4 +1,4 @@
-namespace Assets.Scripts.Multiplayer.Telemetry
+namespace Assets.Scripts.Multiplayer.CraftData
 {
     using Assets.Scripts;
     using Assets.Scripts.Flight;
