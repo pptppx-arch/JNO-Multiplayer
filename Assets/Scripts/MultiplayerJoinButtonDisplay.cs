@@ -1,5 +1,6 @@
 namespace Assets.Scripts.Ui.Designer
 {
+    using Assets.Scripts.Clock;
     using Assets.Scripts.Multiplayer;
     using ModApi.Common;
     using ModApi.Ui;
@@ -68,8 +69,15 @@ namespace Assets.Scripts.Ui.Designer
         {
             var designer = Game.Instance.Designer;
             designer.BeginFlight();
-            if (host == null) ServerConnection.Start(port); else ClientConnection.Connect(host, port);
-            ModHelper.Connect(host, 4444);
+            if (host == null)
+            {
+                ServerConnection.Start(port);
+            }
+            else
+            {
+                ClientConnection.Connect(host, port);
+                ModHelper.Connect(host, 4444);
+            }
         }
     }
 }

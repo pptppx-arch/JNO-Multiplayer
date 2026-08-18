@@ -2,8 +2,7 @@ namespace Assets.Scripts.Multiplayer
 {
     using Assets.Scripts.Flight;
     using Assets.Scripts.Flight.Sim;
-    using Assets.Scripts.Multiplayer.CraftData;
-    using Assets.Scripts.Multiplayer.Telemetry;
+    using Multiplayer.CraftData;
     using System;
     using System.Net.Sockets;
     using System.Threading.Tasks;
@@ -32,6 +31,8 @@ namespace Assets.Scripts.Multiplayer
                 Mod.LogWarning("[ClientConnection] Already connected to a server.");
                 return;
             }
+
+            await PortForwarder.ForwardPort(port);
 
             var networkSender = new NetworkSender();
             var (sentSuccess, client) = await networkSender.ConnectAndSendDataAsync(host, string.Empty, "CONNECT", port);
@@ -66,7 +67,6 @@ namespace Assets.Scripts.Multiplayer
                     ActiveClient = null;
                     LocalClientId = -1;
                     CraftRegistry.ClearAll();
-                    TelemetryClient.StopTelemetry();
                     Mod.Log("[ClientConnection] Disconnected from server.");
                 }
             }
@@ -128,24 +128,14 @@ namespace Assets.Scripts.Multiplayer
                             CraftRegistry.RegisterCraft(LocalClientId, localCraft);
 
                             await CraftData.SendCraftData.SendLocalCraftAsync(ActiveClient, "CLIENT_CRAFT_DATA");
+
+                            //Start telemetry main handler
                         }
                         else
                         {
                             Mod.LogError("[ClientConnection] Failed to parse assigned Client ID. Disconnecting...");
                             Disconnect();
                         }
-                        break;
-
-                    case "CLIENT_DISCONNECTED":
-                        if (int.TryParse(data, out int disconnectedId))
-                        {
-                            CraftRegistry.DespawnCraft(disconnectedId);
-                        }
-                        break;
-
-                    case "TELEMETRY_START":
-                        int udpPort = TcpPort + 1;
-                        TelemetryClient.StartTelemetry(hostIp, udpPort, LocalClientId);
                         break;
 
                     default:

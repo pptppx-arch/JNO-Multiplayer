@@ -13,6 +13,7 @@ MonoBehaviour:
   m_Name: ModData
   m_EditorClassIdentifier: 
   _assemblies:
+  - Open.Nat.dll
   - JNO Multiplayer.dll
   _author: ATDS Inc.
   _description: 

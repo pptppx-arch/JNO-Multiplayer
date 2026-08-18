@@ -1,9 +1,9 @@
 namespace Assets.Scripts.Multiplayer
 {
+    using Assets.Scripts.Clock;
     using Assets.Scripts.Flight;
     using Assets.Scripts.Flight.Sim;
     using Multiplayer.CraftData;
-    using Multiplayer.Telemetry;
     using System;
     using System.Collections.Generic;
     using System.Net;
@@ -21,12 +21,20 @@ namespace Assets.Scripts.Multiplayer
     public static class ServerConnection
     {
         public const int HostClientId = 0;
-
         private static TcpListener _listener;
         private static bool _isHosting;
 
         public static List<ClientSession> Sessions { get; } = new List<ClientSession>();
         private static int _nextClientId = HostClientId;
+
+        // Server time stuff
+        private const int ServerTickRate = 60;
+        private const int MaximumCatchUpTicksPerFrame = 4;
+        private static ServerClock _serverClock;
+
+        // Subscribe telemetry, physics mediation, and other fixed-step systems here.
+        // This event is raised from the main-thread MonoBehaviour that calls PumpClock.
+        public static event Action<long> OnSimulationTick;
 
         #region Server Lifecycle
         public static async void Start(int port)
@@ -37,11 +45,19 @@ namespace Assets.Scripts.Multiplayer
                 return;
             }
 
+            await PortForwarder.ForwardPort(port);
+
             try
             {
                 _listener = new TcpListener(IPAddress.Any, port);
                 _listener.Start();
                 _isHosting = true;
+
+                //More clock stuff
+                _serverClock = new ServerClock(ServerTickRate);
+                _serverClock.Start();
+                Mod.Log($"[ServerHost] Server clock started at {ServerTickRate} ticks/second.");
+
 
                 // 1. Set local Host ID = 0
                 ClientConnection.SetLocalClientId(HostClientId);
@@ -121,7 +137,40 @@ namespace Assets.Scripts.Multiplayer
             }
 
             CraftRegistry.ClearAll();
-            Mod.Log("[ServerHost] Server stopped and cleaned up successfully.");
+            _serverClock?.Stop();
+            _serverClock = null;
+            OnSimulationTick = null;
+            Mod.Log("[ServerHost] Server stopped and cleaned up.");
+        }
+        #endregion
+
+
+        #region Authoritative Simulation Clock
+        // Runs due fixed simulation ticks. Call this once per rendered frame from a persistent Multiplayer MonoBehaviour's Update method, never from a TCP task.
+        public static void PumpClock()
+        {
+            if (!_isHosting || _serverClock == null)
+            {
+                return;
+            }
+
+            int ticksToRun = _serverClock.GetDueTickCount(MaximumCatchUpTicksPerFrame);
+            for (int i = 0; i < ticksToRun; i++)
+            {
+                if (!_serverClock.TryConsumeNextTick(out long tick))
+                {
+                    break;
+                }
+
+                // Systems that update Unity/Juno craft state should execute here on the game thread. Include this exact tick in telemetry and collision packets.
+                OnSimulationTick?.Invoke(tick);
+            }
+        }
+
+        // Returns the latest host-clock sample for connection setup, telemetry, and collision messages. It returns null until the host has started.
+        public static ServerClockSnapshot? GetClockSnapshot()
+        {
+            return _serverClock == null ? (ServerClockSnapshot?)null : _serverClock.GetSnapshot();
         }
         #endregion
 
@@ -173,7 +222,7 @@ namespace Assets.Scripts.Multiplayer
 
                     // Despawn on Host and notify all remaining clients
                     CraftRegistry.DespawnCraft(clientId);
-                    Broadcast(clientId.ToString(), "CLIENT_DISCONNECTED");
+                    SendDataToClients(clientId.ToString(), "CLIENT_DISCONNECTED");
                 }
 
                 client.Close();
@@ -213,7 +262,7 @@ namespace Assets.Scripts.Multiplayer
         #endregion
 
 
-        #region Craft Sync Logic
+        #region Receive Client Craft
         private static async Task HandleClientCraftData(TcpClient client, string data)
         {
             int clientId = GetClientId(client);
@@ -248,10 +297,9 @@ namespace Assets.Scripts.Multiplayer
             }
 
             // 5. Broadcast new client's craft XML to all other connected clients
-            Broadcast(data, $"SPAWN_CRAFT:{clientId}", excludeClientId: clientId);
+            SendDataToClients(data, $"SPAWN_CRAFT:{clientId}", excludeClientId: clientId);
 
-            //TelemetryHost.StartTelemetry(client);
-            Broadcast(null, "TELEMETRY_START", -1);
+            //Start telemetry main handler
         }
 
         private static void UpdateHostCraftXmlIfNeeded()
@@ -291,7 +339,7 @@ namespace Assets.Scripts.Multiplayer
             }
         }
 
-        public static void Broadcast(string data, string metadata, int excludeClientId = -1)
+        public static void SendDataToClients(string data, string metadata, int excludeClientId = -1)
         {
             lock (Sessions)
             {
@@ -315,5 +363,11 @@ namespace Assets.Scripts.Multiplayer
             }
         }
         #endregion
+
+        private static void Update()
+        {
+            ServerConnection.PumpClock();
+        }
+
     }
 }
