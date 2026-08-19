@@ -18,6 +18,7 @@ namespace Assets.Scripts.Multiplayer
 
         private static ClientTelemetryUpdater _telemetryUpdater;
         private static bool _initialCraftUploadPending;
+        private static SerializedTcpWriter _outboundWriter;
 
         public static void SetLocalClientId(int id)
         {
@@ -46,7 +47,10 @@ namespace Assets.Scripts.Multiplayer
             if (sentSuccess && client != null)
             {
                 ActiveClient = client;
-                Mod.Log("[ClientConnection] Connected; waiting for CONNECT_ACCEPTED.");
+                _outboundWriter = new SerializedTcpWriter(client, "Host server");
+                _outboundWriter.Start();
+
+                Mod.Log("[ClientConnection] Connected; waiting for host to accept conection.");
                 _ = StartListeningAsync(client);
             }
             else
@@ -67,8 +71,10 @@ namespace Assets.Scripts.Multiplayer
             {
                 try
                 {
-                    ActiveClient.Close();
-                    ActiveClient.Dispose();
+                    _outboundWriter?.Dispose();
+                    _outboundWriter = null;
+                    ActiveClient = null;
+                    ActiveClient?.Dispose();
                 }
                 catch (Exception ex)
                 {
@@ -208,17 +214,22 @@ namespace Assets.Scripts.Multiplayer
             _ = SendInitialCraftXmlAsync(client, compressedXml);
         }
 
-        private static async Task SendInitialCraftXmlAsync(TcpClient client, string compressedXml)
+        private static Task SendInitialCraftXmlAsync(TcpClient client, string compressedXml)
         {
             if (client == null
                 || client != ActiveClient
-                || !client.Connected
                 || string.IsNullOrEmpty(compressedXml))
             {
-                return;
+                return Task.CompletedTask;
             }
 
-            await SendCraftData.SendRawPayloadAsync(client, compressedXml, "CLIENT_CRAFT_DATA");
+            if (_outboundWriter == null
+                || !_outboundWriter.Enqueue(compressedXml, "CLIENT_CRAFT_DATA"))
+            {
+                Mod.LogWarning("[ClientConnection] Could not queue initial craft XML.");
+            }
+
+            return Task.CompletedTask;
         }
         #endregion
 

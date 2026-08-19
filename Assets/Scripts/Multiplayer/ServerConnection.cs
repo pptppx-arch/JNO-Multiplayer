@@ -6,66 +6,37 @@ namespace Assets.Scripts.Multiplayer
     using Assets.Scripts.Multiplayer.Telemetry;
     using Assets.Scripts.Threading;
     using System;
-    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Net;
     using System.Net.Sockets;
-    using System.Threading;
     using System.Threading.Tasks;
 
-    public sealed class ClientSession
+    public sealed class ClientSession : IDisposable
     {
         public int Id { get; set; }
         public TcpClient Client { get; set; }
         public string CraftXml { get; set; }
         public bool IsHost => Client == null;
-        private readonly ConcurrentQueue<byte[]> _outboundFrames = new ConcurrentQueue<byte[]>();
-        private readonly SemaphoreSlim _outboundSignal = new SemaphoreSlim(0);
-        private readonly CancellationTokenSource _writerCancellation = new CancellationTokenSource();
-        private Task _writerTask;
-        private bool _isClosed;
+
+        private SerializedTcpWriter _writer;
+
         public void StartWriter()
         {
-            if (IsHost || _writerTask != null) return;
-            _writerTask = WriteLoopAsync();
+            if (IsHost || _writer != null) return;
+
+            _writer = new SerializedTcpWriter(Client, $"Client ID {Id}");
+            _writer.Start();
         }
+
         public bool EnqueuePacket(string data, string metadata)
         {
-            if (_isClosed || IsHost || Client == null || !Client.Connected)
-            {
-                return false;
-            }
-
-            _outboundFrames.Enqueue(NetworkSender.BuildPacket(data ?? string.Empty, metadata));
-            _outboundSignal.Release();
-            return true;
+            return _writer != null && _writer.Enqueue(data, metadata);
         }
 
-        private async Task WriteLoopAsync()
+        public void Dispose()
         {
-            try
-            {
-                NetworkStream stream = Client.GetStream();
-
-                while (!_writerCancellation.IsCancellationRequested)
-                {
-                    await _outboundSignal.WaitAsync(_writerCancellation.Token);
-
-                    while (_outboundFrames.TryDequeue(out byte[] frame))
-                    {
-                        await stream.WriteAsync(frame, 0, frame.Length);
-                        await stream.FlushAsync();
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Normal session shutdown.
-            }
-            catch (Exception ex)
-            {
-                Mod.LogWarning($"[ServerHost] TCP writer for Client ID {Id} stopped: {ex.Message}");
-            }
+            _writer?.Dispose();
+            _writer = null;
         }
     }
 
@@ -183,7 +154,6 @@ namespace Assets.Scripts.Multiplayer
                 {
                     try
                     {
-                        session.Client?.Close();
                         session.Client?.Dispose();
                     }
                     catch (Exception ex)
@@ -293,21 +263,21 @@ namespace Assets.Scripts.Multiplayer
             }
             finally
             {
-                int clientId = GetClient(client).Id;
+                ClientSession departedSession = FindSession(client);
+                int clientId = departedSession == null ? -1 : departedSession.Id;
+
                 if (clientId != -1)
                 {
                     lock (Sessions)
                     {
-                        Sessions.RemoveAll(s => s.Client == client);
+                        Sessions.Remove(departedSession);
                     }
 
+                    departedSession.Dispose();
                     _telemetryUpdater?.RemoveClient(clientId);
                     MultiplayerThread.Post(() => CraftRegistry.DespawnCraft(clientId));
                     SendDataToClients(clientId.ToString(), "CLIENT_DISCONNECTED");
                 }
-
-                client.Close();
-                Mod.Log($"[ServerHost] Client ID {clientId} disconnected.");
             }
         }
 
@@ -371,7 +341,7 @@ namespace Assets.Scripts.Multiplayer
         #region Craft XML transfer
         private static async Task HandleClientCraftDataAsync(TcpClient client, string data)
         {
-            int clientId = GetClient(client).Id;
+            int clientId = GetClientId(client);
             if (clientId == -1) return;
 
             lock (Sessions)
@@ -411,7 +381,7 @@ namespace Assets.Scripts.Multiplayer
 
             foreach (KeyValuePair<int, string> existingCraft in existingCrafts)
             {
-                var _client = GetClient(client);
+                var _client = FindSession(client);
                 _client.EnqueuePacket(existingCraft.Value, $"SPAWN_CRAFT:{existingCraft.Key}");
             }
 
@@ -439,13 +409,17 @@ namespace Assets.Scripts.Multiplayer
             }
         }
 
-        private static ClientSession GetClient(TcpClient client)
+        private static ClientSession FindSession(TcpClient client)
         {
             lock (Sessions)
             {
-                ClientSession session = Sessions.Find(s => s.Client == client);
-                return session == null ? null : session;
+                return Sessions.Find(s => s.Client == client);
             }
+        }
+        private static int GetClientId(TcpClient client)
+        {
+            ClientSession session = FindSession(client);
+            return session == null ? -1 : session.Id;
         }
         #endregion
 
