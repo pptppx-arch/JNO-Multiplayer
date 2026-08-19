@@ -235,7 +235,7 @@ namespace Assets.Scripts.Multiplayer
                     while (_isHosting && client.Connected)
                     {
                         var (data, metadata) = await receiver.ReceiveDataAsync(client);
-                        if (data == null || metadata == null) break;
+                        if (data == null || metadata == null || metadata.Length > 256 || data.Length > 2 * 1024 * 1024) break;
 
                         switch (metadata)
                         {
