@@ -1,0 +1,125 @@
+namespace Assets.Scripts.Multiplayer.Telemetry
+{
+    using System;
+    using System.Globalization;
+    using System.Text;
+
+    /// <summary>
+    /// Shared UDP craft-state payload. Every physical value is a double; no Unity float
+    /// type appears in the wire contract.
+    /// </summary>
+    public struct TelemetryPacket
+    {
+        public const string PacketType = "TEL1";
+        public const int FieldCount = 17;
+
+        public int ClientId;
+        public long HostTick;
+        public uint Sequence;
+
+        public double PositionX;
+        public double PositionY;
+        public double PositionZ;
+
+        public double VelocityX;
+        public double VelocityY;
+        public double VelocityZ;
+
+        public double RotationX;
+        public double RotationY;
+        public double RotationZ;
+        public double RotationW;
+
+        public double AngularVelocityX;
+        public double AngularVelocityY;
+        public double AngularVelocityZ;
+
+        public bool IsFinite
+        {
+            get
+            {
+                return IsFiniteDouble(PositionX) && IsFiniteDouble(PositionY) && IsFiniteDouble(PositionZ)
+                    && IsFiniteDouble(VelocityX) && IsFiniteDouble(VelocityY) && IsFiniteDouble(VelocityZ)
+                    && IsFiniteDouble(RotationX) && IsFiniteDouble(RotationY)
+                    && IsFiniteDouble(RotationZ) && IsFiniteDouble(RotationW)
+                    && IsFiniteDouble(AngularVelocityX) && IsFiniteDouble(AngularVelocityY)
+                    && IsFiniteDouble(AngularVelocityZ);
+            }
+        }
+
+        public string Serialize()
+        {
+            var builder = new StringBuilder(384);
+            builder.Append(PacketType).Append('|');
+            builder.Append(ClientId).Append('|');
+            builder.Append(HostTick).Append('|');
+            builder.Append(Sequence).Append('|');
+
+            AppendDouble(builder, PositionX);
+            AppendDouble(builder, PositionY);
+            AppendDouble(builder, PositionZ);
+            AppendDouble(builder, VelocityX);
+            AppendDouble(builder, VelocityY);
+            AppendDouble(builder, VelocityZ);
+            AppendDouble(builder, RotationX);
+            AppendDouble(builder, RotationY);
+            AppendDouble(builder, RotationZ);
+            AppendDouble(builder, RotationW);
+            AppendDouble(builder, AngularVelocityX);
+            AppendDouble(builder, AngularVelocityY);
+            AppendDouble(builder, AngularVelocityZ, appendSeparator: false);
+            return builder.ToString();
+        }
+
+        public static bool TryParse(string payload, out TelemetryPacket packet)
+        {
+            packet = default(TelemetryPacket);
+            if (string.IsNullOrWhiteSpace(payload)) return false;
+
+            string[] fields = payload.Split('|');
+            if (fields.Length != FieldCount || !string.Equals(fields[0], PacketType, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!int.TryParse(fields[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out packet.ClientId)
+                || !long.TryParse(fields[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out packet.HostTick)
+                || !uint.TryParse(fields[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out packet.Sequence)
+                || !TryReadDouble(fields[4], out packet.PositionX)
+                || !TryReadDouble(fields[5], out packet.PositionY)
+                || !TryReadDouble(fields[6], out packet.PositionZ)
+                || !TryReadDouble(fields[7], out packet.VelocityX)
+                || !TryReadDouble(fields[8], out packet.VelocityY)
+                || !TryReadDouble(fields[9], out packet.VelocityZ)
+                || !TryReadDouble(fields[10], out packet.RotationX)
+                || !TryReadDouble(fields[11], out packet.RotationY)
+                || !TryReadDouble(fields[12], out packet.RotationZ)
+                || !TryReadDouble(fields[13], out packet.RotationW)
+                || !TryReadDouble(fields[14], out packet.AngularVelocityX)
+                || !TryReadDouble(fields[15], out packet.AngularVelocityY)
+                || !TryReadDouble(fields[16], out packet.AngularVelocityZ))
+            {
+                return false;
+            }
+
+            return packet.ClientId >= 0 && packet.HostTick >= 0 && packet.IsFinite;
+        }
+
+        private static bool TryReadDouble(string text, out double value)
+        {
+            return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+                && IsFiniteDouble(value);
+        }
+
+        private static void AppendDouble(StringBuilder builder, double value, bool appendSeparator = true)
+        {
+            builder.Append(value.ToString("R", CultureInfo.InvariantCulture));
+            if (appendSeparator) builder.Append('|');
+        }
+
+        private static bool IsFiniteDouble(double value)
+        {
+            return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+    }
+}

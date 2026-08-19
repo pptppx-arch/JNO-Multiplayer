@@ -2,7 +2,7 @@ namespace Assets.Scripts
 {
     using Ui.Designer;
     using UnityEngine;
-
+    using Scripts.Multiplayer;
     public class Mod : ModApi.Mods.GameMod
     {
         //Singleton instance of the mod
@@ -33,9 +33,10 @@ namespace Assets.Scripts
         protected override void OnModInitialized()
         {
             base.OnModInitialized();
-            Log("something");
+            Log("Mod initalized.");
 
             MultiplayerJoinButton.Initialize();
+            MultiplayerTelemetryRuntime.EnsureCreated();
         }
     }
 }

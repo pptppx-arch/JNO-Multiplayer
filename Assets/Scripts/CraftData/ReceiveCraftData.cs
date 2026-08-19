@@ -1,5 +1,7 @@
 namespace Assets.Scripts.Multiplayer.CraftData
 {
+    using Assets.Scripts.Flight.Sim;
+    using Assets.Scripts.Threading;
     using System;
     using System.IO;
     using System.IO.Compression;
@@ -8,13 +10,11 @@ namespace Assets.Scripts.Multiplayer.CraftData
 
     public static class ReceiveCraftData
     {
-        #region Decompression & Processing
         public static string DecompressCraftXml(string craftData)
         {
             if (string.IsNullOrWhiteSpace(craftData)) return string.Empty;
 
             string trimmed = craftData.TrimStart();
-            // If payload is already raw uncompressed XML
             if (trimmed.StartsWith("<"))
             {
                 return craftData;
@@ -23,8 +23,8 @@ namespace Assets.Scripts.Multiplayer.CraftData
             try
             {
                 byte[] compressedBytes = Convert.FromBase64String(craftData);
-                using (MemoryStream ms = new MemoryStream(compressedBytes))
-                using (GZipStream gzip = new GZipStream(ms, CompressionMode.Decompress))
+                using (MemoryStream input = new MemoryStream(compressedBytes))
+                using (GZipStream gzip = new GZipStream(input, CompressionMode.Decompress))
                 using (StreamReader reader = new StreamReader(gzip, Encoding.UTF8))
                 {
                     return reader.ReadToEnd();
@@ -37,17 +37,21 @@ namespace Assets.Scripts.Multiplayer.CraftData
             }
         }
 
-        public static async Task ProcessAndSpawnAsync(int clientId, string craftData)
+        /// <summary>
+        /// Decompresses plain data on the calling path, then schedules Juno craft spawning
+        /// for the next MultiplayerThread.Pump() call on the game thread.
+        /// </summary>
+        public static Task<CraftNode> ProcessAndSpawnAsync(int clientId, string craftData)
         {
             string decompressedXml = DecompressCraftXml(craftData);
             if (string.IsNullOrEmpty(decompressedXml))
             {
-                Mod.LogError($"[ReceiveCraftData] Cannot spawn craft for Client ID {clientId}: Unreadable or empty XML.");
-                return;
+                Mod.LogError($"[ReceiveCraftData] Cannot spawn craft for Client ID {clientId}: unreadable or empty XML.");
+                return Task.FromResult<CraftNode>(null);
             }
 
-            await CraftSpawner.SpawnCraft(clientId, decompressedXml);
+            return MultiplayerThread.Enqueue(() =>
+                CraftSpawner.SpawnCraftOnGameThread(clientId, decompressedXml));
         }
-        #endregion
     }
 }

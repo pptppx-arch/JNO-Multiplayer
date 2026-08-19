@@ -8,21 +8,29 @@ namespace Assets.Scripts.Multiplayer
 
     public class PortForwarder
     {
+        /// <summary>
+        /// Creates matching TCP and UDP mappings. TCP is required for handshake/XML;
+        /// UDP is required for telemetry. The same numeric port is valid because the
+        /// protocols have separate transport namespaces.
+        /// </summary>
         public static async Task<bool> ForwardPort(int port)
         {
             try
             {
                 var discoverer = new NatDiscoverer();
-                var cts = new CancellationTokenSource(5000); // 5 sec timeout
-                var device = await discoverer.DiscoverDeviceAsync(PortMapper.Upnp, cts);
+                using (var cts = new CancellationTokenSource(5000))
+                {
+                    var device = await discoverer.DiscoverDeviceAsync(PortMapper.Upnp, cts);
+                    await device.CreatePortMapAsync(new Mapping(Protocol.Tcp, port, port, "JNOMultiplayer TCP"));
+                    await device.CreatePortMapAsync(new Mapping(Protocol.Udp, port, port, "JNOMultiplayer UDP"));
+                }
 
-                await device.CreatePortMapAsync(new Mapping(Protocol.Tcp, port, port, "JNOMultiplayer"));
-                Mod.Log($"[ServerHost] UPnP automatically forwarded port {port}!");
+                Mod.Log($"[PortForwarder] UPnP forwarded TCP and UDP port {port}.");
                 return true;
             }
             catch (Exception ex)
             {
-                Mod.LogWarning($"[ServerHost] UPnP failed: {ex.Message}. Host may still need manual port forwarding.");
+                Mod.LogWarning($"[PortForwarder] UPnP failed: {ex.Message}. Host may need both TCP and UDP manual forwarding.");
                 return false;
             }
         }
