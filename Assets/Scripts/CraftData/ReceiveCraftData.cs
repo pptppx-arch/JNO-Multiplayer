@@ -27,7 +27,7 @@ namespace Assets.Scripts.Multiplayer.CraftData
                 using (GZipStream gzip = new GZipStream(input, CompressionMode.Decompress))
                 using (StreamReader reader = new StreamReader(gzip, Encoding.UTF8))
                 {
-                    if (reader.ToString().Length > 8 * 1024 * 1024) return null; else //blah blah blah stfu
+                    if (reader.ToString().Length > 8 * 1024 * 1024) return null;
                     return reader.ReadToEnd();
                 }
             }
