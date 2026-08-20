@@ -87,32 +87,27 @@ namespace Assets.Scripts.Multiplayer.Telemetry
             // Packet client ID must map to an active TCP session and the source IP must
             // match that session's TCP peer. This prevents a random internet sender from
             // claiming another assigned ID. The UDP source port is learned once.
-            if (!ServerConnection.IsRemoteSessionActive(packet.ClientId)
-                || !ServerConnection.IsExpectedClientAddress(packet.ClientId, remoteEndPoint.Address))
+            if (!ServerConnection.IsRemoteSessionActive(packet.ClientId) || !ServerConnection.IsExpectedClientAddress(packet.ClientId, remoteEndPoint.Address) || !ServerConnection.IsExpectedUdpToken(packet.ClientId, packet.SessionToken))
             {
-                Mod.LogWarning($"[HostTelemetryUpdater] Rejected telemetry from unknown/mismatched Client ID {packet.ClientId}.");
+                Mod.LogWarning(
+                    $"[HostTelemetryUpdater] Rejected telemetry with invalid session, source IP, or UDP token " +
+                    $"for Client ID {packet.ClientId}.");
                 return;
             }
-
             if (_udpEndPoints.TryGetValue(packet.ClientId, out IPEndPoint existingEndpoint))
             {
                 if (!EndpointsEqual(existingEndpoint, remoteEndPoint))
                 {
-                    Mod.LogWarning($"[HostTelemetryUpdater] Rejected changed UDP endpoint for Client ID {packet.ClientId}.");
+                    Mod.LogWarning(
+                        $"[HostTelemetryUpdater] Rejected changed UDP endpoint for Client ID {packet.ClientId}.");
                     return;
                 }
             }
             else
             {
                 _udpEndPoints[packet.ClientId] = remoteEndPoint;
-                Mod.Log($"[HostTelemetryUpdater] Registered UDP endpoint for Client ID {packet.ClientId}: {remoteEndPoint}.");
-            }
-
-            if (!ServerConnection.IsRemoteSessionActive(packet.ClientId) || !ServerConnection.IsExpectedClientAddress(packet.ClientId, remoteEndPoint.Address) || !ServerConnection.IsExpectedUdpToken(packet.ClientId, packet.SessionToken))
-            {
-                Mod.LogWarning($"[HostTelemetryUpdater] Rejected telemetry with invalid session, source IP, or UDP token for Client ID {packet.ClientId}.");
-                return;
-            }
+                Mod.Log(
+                    $"[HostTelemetryUpdater] Registered UDP endpoint for Client ID {packet.ClientId}: {remoteEndPoint}.");
 
             if (_lastClientSequence.TryGetValue(packet.ClientId, out uint lastSequence) && !IsNewerSequence(packet.Sequence, lastSequence))
             {

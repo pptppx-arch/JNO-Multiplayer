@@ -57,6 +57,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
             builder.Append(ClientId).Append('|');
             builder.Append(HostTick).Append('|');
             builder.Append(Sequence).Append('|');
+            builder.Append(SessionToken).Append('|');
 
             AppendDouble(builder, PositionX);
             AppendDouble(builder, PositionY);
