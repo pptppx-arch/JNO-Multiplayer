@@ -23,15 +23,20 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         private double _nextSendTimeSeconds;
         private bool _firstPacketPending;
         private bool _started;
+        private readonly string _udpSessionToken;
 
-        public ClientTelemetryUpdater(IPEndPoint hostEndPoint, int localClientId, double sendRateHz = 20.0)
+        public ClientTelemetryUpdater(IPEndPoint hostEndPoint, int localClientId, string udpSessionToken, double sendRateHz = 20.0)
         {
             if (hostEndPoint == null) throw new ArgumentNullException(nameof(hostEndPoint));
             if (localClientId < 0) throw new ArgumentOutOfRangeException(nameof(localClientId));
-            if (sendRateHz <= 0.0) throw new ArgumentOutOfRangeException(nameof(sendRateHz));
+            if (!TelemetryPacket.IsValidSessionToken(udpSessionToken))
+            {
+                throw new ArgumentException("A valid UDP session token is required.", nameof(udpSessionToken));
+            }
 
             _hostEndPoint = hostEndPoint;
             _localClientId = localClientId;
+            _udpSessionToken = udpSessionToken;
             _sendIntervalSeconds = 1.0 / sendRateHz;
             _udp = new UdpNetworkHandler();
             _receiver = new TelemetryReceiver(_udp);
@@ -61,7 +66,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         {
             if (!_started) return;
 
-            _receiver.PumpRemoteProxies(_localClientId, deltaTime);
+            _receiver.PumpRemoteProxies(_localClientId, deltaTime, _hostEndPoint, _udpSessionToken);
 
             double now = _clock.Elapsed.TotalSeconds;
             if (_firstPacketPending || now >= _nextSendTimeSeconds)
@@ -90,6 +95,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
 
             if (_packager.TryPackage(localCraft, _receiver.LastObservedHostTick, out TelemetryPacket packet))
             {
+                packet.SessionToken = _udpSessionToken;
                 _ = _udp.SendAsync(packet.Serialize(), _hostEndPoint);
             }
         }

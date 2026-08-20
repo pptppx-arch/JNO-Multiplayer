@@ -47,9 +47,9 @@ namespace Assets.Scripts
                     Mod.Log("Attempt to start remote debugger success, host: " + ip);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                Mod.LogError("Attempt to start remote debugger failed");
+                Mod.LogError("Attempt to start remote debugger failed, exception: " + ex);
             }
         }
 

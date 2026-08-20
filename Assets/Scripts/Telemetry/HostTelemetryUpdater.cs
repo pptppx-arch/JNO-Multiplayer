@@ -108,8 +108,13 @@ namespace Assets.Scripts.Multiplayer.Telemetry
                 Mod.Log($"[HostTelemetryUpdater] Registered UDP endpoint for Client ID {packet.ClientId}: {remoteEndPoint}.");
             }
 
-            if (_lastClientSequence.TryGetValue(packet.ClientId, out uint lastSequence)
-                && !IsNewerSequence(packet.Sequence, lastSequence))
+            if (!ServerConnection.IsRemoteSessionActive(packet.ClientId) || !ServerConnection.IsExpectedClientAddress(packet.ClientId, remoteEndPoint.Address) || !ServerConnection.IsExpectedUdpToken(packet.ClientId, packet.SessionToken))
+            {
+                Mod.LogWarning($"[HostTelemetryUpdater] Rejected telemetry with invalid session, source IP, or UDP token for Client ID {packet.ClientId}.");
+                return;
+            }
+
+            if (_lastClientSequence.TryGetValue(packet.ClientId, out uint lastSequence) && !IsNewerSequence(packet.Sequence, lastSequence))
             {
                 return;
             }
@@ -157,12 +162,24 @@ namespace Assets.Scripts.Multiplayer.Telemetry
 
                 foreach (KeyValuePair<int, TelemetryPacket> state in _latestState)
                 {
-                    if (state.Key == destinationClientId) continue;
-                    _ = _udp.SendAsync(state.Value.Serialize(), destinationEndPoint);
+                    TelemetryPacket relayPacket = state.Value;
+                    relayPacket.SessionToken = GetUdpSessionToken(destinationClientId);
+
+                    if (!string.IsNullOrEmpty(relayPacket.SessionToken))
+                    {
+                        _ = _udp.SendAsync(relayPacket.Serialize(), destinationEndPoint);
+                    }
                 }
             }
         }
-
+        private static string GetUdpSessionToken(int clientId)
+        {
+            lock (ServerConnection.Sessions)
+            {
+                ClientSession session = ServerConnection.Sessions.Find(s => s.Id == clientId);
+                return session == null ? string.Empty : session.UdpSessionToken;
+            }
+        }
         private static bool EndpointsEqual(IPEndPoint left, IPEndPoint right)
         {
             return left != null && right != null && left.Port == right.Port && left.Address.Equals(right.Address);

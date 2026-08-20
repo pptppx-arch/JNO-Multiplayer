@@ -66,12 +66,24 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         /// CraftRegistry and applies a smoothed kinematic Rigidbody pose. Packets for
         /// the local client or stale/out-of-order sequences are ignored.
         /// </summary>
-        public int PumpRemoteProxies(int localClientId, float deltaTime, float positionLerpRate = 12f, float rotationSlerpRate = 12f)
+        public int PumpRemoteProxies(int localClientId, float deltaTime, IPEndPoint expectedHostEndPoint, string expectedSessionToken, float positionLerpRate = 12f, float rotationSlerpRate = 12f)
         {
+            if (expectedHostEndPoint == null) throw new ArgumentNullException(nameof(expectedHostEndPoint));
+            if (!TelemetryPacket.IsValidSessionToken(expectedSessionToken))
+            {
+                throw new ArgumentException("A valid UDP session token is required.", nameof(expectedSessionToken));
+            }
             int applied = 0;
             while (_pending.TryDequeue(out ReceivedTelemetry received))
             {
-                TelemetryPacket packet = received.Packet;
+                TelemetryPacket packet =    received.Packet;
+
+                if (!EndpointsEqual(received.RemoteEndPoint, expectedHostEndPoint) || !TelemetryPacket.TokensEqual(expectedSessionToken, packet.SessionToken))
+                {
+                    // Do not log each rejected UDP packet; otherwise a sender can create log spam.
+                    continue;
+                }
+                
                 if (packet.ClientId == localClientId || !IsNewSequence(packet.ClientId, packet.Sequence))
                 {
                     continue;
@@ -187,6 +199,13 @@ namespace Assets.Scripts.Multiplayer.Telemetry
                 Packet = packet;
                 RemoteEndPoint = remoteEndPoint;
             }
+        }
+        private static bool EndpointsEqual(IPEndPoint actual, IPEndPoint expected)
+        {
+            return actual != null
+                && expected != null
+                && actual.Port == expected.Port
+                && actual.Address.Equals(expected.Address);
         }
     }
 }

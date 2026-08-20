@@ -246,7 +246,8 @@ namespace Assets.Scripts.Multiplayer
                 IPAddress hostAddress = ResolveHostAddress(hostIp);
                 _telemetryUpdater = new ClientTelemetryUpdater(
                     new IPEndPoint(hostAddress, TcpPort),
-                    LocalClientId);
+                    LocalClientId,
+                    _udpSessionToken);
                 _telemetryUpdater.Start();
                 Mod.Log($"[ClientConnection] Client telemetry started for Client ID {LocalClientId}.");
             }
