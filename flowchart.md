@@ -65,9 +65,3 @@ The diagram distinguishes two execution domains. **TCP and UDP continuations own
 ## Known diagram scope
 
 The flowchart represents the repository implementation at the cited commit. It shows the active `TEL1` packet and currently implemented TCP/UDP roles. Proposed follow-up changes not yet committed to the repository—for example, the optional P1-2 per-session UDP token patch—are intentionally not depicted as active behavior.
-
-## References
-
-[1]: [JNO-Multiplayer repository](https://github.com/pptppx-arch/JNO-Multiplayer)
-
-[2]: [Reviewed repository commit `7b6b94e`](https://github.com/pptppx-arch/JNO-Multiplayer/commit/7b6b94e34fa56cc3b233eeacf052d32217d6e4bb)
