@@ -19,6 +19,7 @@ namespace Assets.Scripts.Multiplayer
         private static ClientTelemetryUpdater _telemetryUpdater;
         private static bool _initialCraftUploadPending;
         private static SerializedTcpWriter _outboundWriter;
+        private static string _udpSessionToken;
 
         public static void SetLocalClientId(int id)
         {
@@ -87,6 +88,7 @@ namespace Assets.Scripts.Multiplayer
             }
 
             LocalClientId = -1;
+            _udpSessionToken = null;
 
             // This destroys remote proxies on the next game-thread update while preserving
             // the local Juno-owned craft identified before LocalClientId was reset.
@@ -151,14 +153,15 @@ namespace Assets.Scripts.Multiplayer
                 switch (metadata)
                 {
                     case "CONNECT_ACCEPTED":
-                        if (!int.TryParse(data, out int assignedId) || assignedId < 0)
+                        if (!TryParseConnectAccepted(data, out int assignedId, out string udpSessionToken))
                         {
-                            Mod.LogError("[ClientConnection] Invalid assigned Client ID.");
+                            Mod.LogError("[ClientConnection] Invalid CONNECT_ACCEPTED client ID or UDP session token.");
                             Disconnect();
                             return;
                         }
 
                         LocalClientId = assignedId;
+                        _udpSessionToken = udpSessionToken;
                         _initialCraftUploadPending = true;
                         StartTelemetryAfterHandshake();
                         break;
@@ -233,6 +236,7 @@ namespace Assets.Scripts.Multiplayer
         }
         #endregion
 
+        #region Helper methods
         private static void StartTelemetryAfterHandshake()
         {
             if (_telemetryUpdater != null || LocalClientId < 0) return;
@@ -271,5 +275,25 @@ namespace Assets.Scripts.Multiplayer
 
             return addresses[0];
         }
+        private static bool TryParseConnectAccepted(string data, out int assignedId, out string udpSessionToken)
+        {
+            assignedId = -1;
+            udpSessionToken = null;
+            if (string.IsNullOrEmpty(data)) return false;
+
+            string[] fields = data.Split('|');
+            if (fields.Length != 2
+                || !int.TryParse(fields[0], out assignedId)
+                || assignedId < 0
+                || !TelemetryPacket.IsValidSessionToken(fields[1]))
+            {
+                assignedId = -1;
+                return false;
+            }
+
+            udpSessionToken = fields[1];
+            return true;
+        }
+        #endregion
     }
 }

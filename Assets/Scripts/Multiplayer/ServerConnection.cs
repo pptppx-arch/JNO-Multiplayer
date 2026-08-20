@@ -10,6 +10,8 @@ namespace Assets.Scripts.Multiplayer
     using System.Net;
     using System.Net.Sockets;
     using System.Threading.Tasks;
+    using System.Security.Cryptography;
+    //RAH RAH RAH
 
     public sealed class ClientSession : IDisposable
     {
@@ -17,6 +19,7 @@ namespace Assets.Scripts.Multiplayer
         public TcpClient Client { get; set; }
         public string CraftXml { get; set; }
         public bool IsHost => Client == null;
+        public string UdpSessionToken { get; set; }
 
         private SerializedTcpWriter _writer;
 
@@ -223,6 +226,31 @@ namespace Assets.Scripts.Multiplayer
                 return tcpEndPoint != null && tcpEndPoint.Address.Equals(remoteAddress);
             }
         }
+        public static bool IsExpectedUdpToken(int clientId, string suppliedToken)
+        {
+            lock (Sessions)
+            {
+                ClientSession session = Sessions.Find(s => s.Id == clientId);
+                return session != null
+                    && !session.IsHost
+                    && TelemetryPacket.TokensEqual(session.UdpSessionToken, suppliedToken);
+            }
+        }
+
+        private static string CreateUdpSessionToken()
+        {
+            byte[] randomBytes = new byte[32];
+            using (RandomNumberGenerator random = RandomNumberGenerator.Create())
+            {
+                random.GetBytes(randomBytes);
+            }
+
+            // 32 random bytes encoded as URL-safe Base64, without '=' padding: 43 characters.
+            return Convert.ToBase64String(randomBytes)
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+        }
         #endregion
 
         #region TCP receive loop
@@ -293,7 +321,8 @@ namespace Assets.Scripts.Multiplayer
                 {
                     Id = assignedId,
                     Client = client,
-                    CraftXml = string.Empty
+                    CraftXml = string.Empty,
+                    UdpSessionToken = CreateUdpSessionToken()
                 };
 
                 Sessions.Add(session);
@@ -304,6 +333,7 @@ namespace Assets.Scripts.Multiplayer
 
             EnsureHostTelemetryStarted();
 
+            string connectAcceptedPayload = session.Id + "|" + session.UdpSessionToken;
             if (!session.EnqueuePacket(session.Id.ToString(), "CONNECT_ACCEPTED"))
             {
                 Mod.LogWarning($"[ServerHost] Could not queue CONNECT_ACCEPTED for Client ID {session.Id}.");

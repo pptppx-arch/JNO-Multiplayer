@@ -11,7 +11,9 @@ namespace Assets.Scripts.Multiplayer.Telemetry
     public struct TelemetryPacket
     {
         public const string PacketType = "TEL1";
-        public const int FieldCount = 17;
+        public const int FieldCount = 18;
+        public const int SessionTokenLength = 43;
+        public string SessionToken;
 
         public int ClientId;
         public long HostTick;
@@ -54,6 +56,12 @@ namespace Assets.Scripts.Multiplayer.Telemetry
             builder.Append(ClientId).Append('|');
             builder.Append(HostTick).Append('|');
             builder.Append(Sequence).Append('|');
+            if (!IsValidSessionToken(SessionToken)) throw new InvalidOperationException("Telemetry packet has no valid UDP session token.");
+            builder.Append(PacketType).Append('|');
+            builder.Append(ClientId).Append('|');
+            builder.Append(HostTick).Append('|');
+            builder.Append(Sequence).Append('|');
+            builder.Append(SessionToken).Append('|');
 
             AppendDouble(builder, PositionX);
             AppendDouble(builder, PositionY);
@@ -82,6 +90,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
                 return false;
             }
 
+            packet.SessionToken = fields[4];
             if (!int.TryParse(fields[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out packet.ClientId)
                 || !long.TryParse(fields[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out packet.HostTick)
                 || !uint.TryParse(fields[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out packet.Sequence)
@@ -120,6 +129,43 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         private static bool IsFiniteDouble(double value)
         {
             return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+        public static bool IsValidSessionToken(string token)
+        {
+            if (string.IsNullOrEmpty(token) || token.Length != SessionTokenLength)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < token.Length; i++)
+            {
+                char c = token[i];
+                bool upper = c >= 'A' && c <= 'Z';
+                bool lower = c >= 'a' && c <= 'z';
+                bool digit = c >= '0' && c <= '9';
+                if (!upper && !lower && !digit && c != '-' && c != '_')
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public static bool TokensEqual(string expected, string actual)
+        {
+            if (!IsValidSessionToken(expected) || !IsValidSessionToken(actual))
+            {
+                return false;
+            }
+
+            int difference = 0;
+            for (int i = 0; i < SessionTokenLength; i++)
+            {
+                difference |= expected[i] ^ actual[i];
+            }
+
+            return difference == 0;
         }
     }
 }

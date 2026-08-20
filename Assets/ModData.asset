@@ -16,7 +16,7 @@ MonoBehaviour:
   - Open.Nat.dll
   - JNO Multiplayer.dll
   _author: ATDS Inc.
-  _description: 
+  _description: ahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
   _loadPriority: 1000
   _name: JNO Multiplayer
   _otherAssets: []
@@ -27,8 +27,8 @@ MonoBehaviour:
   _steamTags: 
   _steamTitle: 
   _steamVisibility: 0
-  _versionMajor: 1
-  _versionMinor: 1
+  _versionMajor: 10
+  _versionMinor: 23
   _partCategories: []
   _parts: []
   _partStyleExtensions: []
