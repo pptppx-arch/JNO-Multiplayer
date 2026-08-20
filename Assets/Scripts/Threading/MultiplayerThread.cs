@@ -9,10 +9,11 @@ namespace Assets.Scripts.Threading
     /// Only MultiplayerTelemetryRuntime.Update() may call Pump().
     /// </summary>
     public static class MultiplayerThread
-    {
+    {   
         private interface IWorkItem
         {
             void Execute();
+            void Cancel();
         }
 
         private sealed class ActionWorkItem : IWorkItem
@@ -28,6 +29,7 @@ namespace Assets.Scripts.Threading
             {
                 _action();
             }
+            public void Cancel() { }
         }
 
         private sealed class FuncWorkItem<T> : IWorkItem
@@ -54,6 +56,10 @@ namespace Assets.Scripts.Threading
                     _completion.TrySetException(ex);
                 }
             }
+            public void Cancel()
+            {
+                _completion.TrySetCanceled();
+            }
         }
 
         private static readonly ConcurrentQueue<IWorkItem> _pending =
@@ -78,6 +84,17 @@ namespace Assets.Scripts.Threading
             var item = new FuncWorkItem<T>(function);
             _pending.Enqueue(item);
             return item.Task;
+        }
+        public static int CancelAllPending()
+        {
+            int cancelled = 0;
+            while (_pending.TryDequeue(out IWorkItem item))
+            {
+                item.Cancel();
+                cancelled++;
+            }
+
+            return cancelled;
         }
 
         /// <summary>

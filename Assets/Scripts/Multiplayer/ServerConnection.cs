@@ -334,7 +334,7 @@ namespace Assets.Scripts.Multiplayer
             EnsureHostTelemetryStarted();
 
             string connectAcceptedPayload = session.Id + "|" + session.UdpSessionToken;
-            if (!session.EnqueuePacket(session.Id.ToString(), "CONNECT_ACCEPTED"))
+            if (!session.EnqueuePacket(connectAcceptedPayload, "CONNECT_ACCEPTED"))
             {
                 Mod.LogWarning($"[ServerHost] Could not queue CONNECT_ACCEPTED for Client ID {session.Id}.");
             }

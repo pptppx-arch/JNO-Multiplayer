@@ -51,17 +51,12 @@ namespace Assets.Scripts.Multiplayer.Telemetry
 
         public string Serialize()
         {
+            if (!IsValidSessionToken(SessionToken)) throw new InvalidOperationException("Telemetry packet has no valid UDP session token.");
             var builder = new StringBuilder(384);
             builder.Append(PacketType).Append('|');
             builder.Append(ClientId).Append('|');
             builder.Append(HostTick).Append('|');
             builder.Append(Sequence).Append('|');
-            if (!IsValidSessionToken(SessionToken)) throw new InvalidOperationException("Telemetry packet has no valid UDP session token.");
-            builder.Append(PacketType).Append('|');
-            builder.Append(ClientId).Append('|');
-            builder.Append(HostTick).Append('|');
-            builder.Append(Sequence).Append('|');
-            builder.Append(SessionToken).Append('|');
 
             AppendDouble(builder, PositionX);
             AppendDouble(builder, PositionY);
@@ -85,28 +80,31 @@ namespace Assets.Scripts.Multiplayer.Telemetry
             if (string.IsNullOrWhiteSpace(payload)) return false;
 
             string[] fields = payload.Split('|');
-            if (fields.Length != FieldCount || !string.Equals(fields[0], PacketType, StringComparison.Ordinal))
+            if (fields.Length != FieldCount
+                || !string.Equals(fields[0], PacketType, StringComparison.Ordinal))
             {
                 return false;
             }
 
             packet.SessionToken = fields[4];
+
             if (!int.TryParse(fields[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out packet.ClientId)
                 || !long.TryParse(fields[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out packet.HostTick)
                 || !uint.TryParse(fields[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out packet.Sequence)
-                || !TryReadDouble(fields[4], out packet.PositionX)
-                || !TryReadDouble(fields[5], out packet.PositionY)
-                || !TryReadDouble(fields[6], out packet.PositionZ)
-                || !TryReadDouble(fields[7], out packet.VelocityX)
-                || !TryReadDouble(fields[8], out packet.VelocityY)
-                || !TryReadDouble(fields[9], out packet.VelocityZ)
-                || !TryReadDouble(fields[10], out packet.RotationX)
-                || !TryReadDouble(fields[11], out packet.RotationY)
-                || !TryReadDouble(fields[12], out packet.RotationZ)
-                || !TryReadDouble(fields[13], out packet.RotationW)
-                || !TryReadDouble(fields[14], out packet.AngularVelocityX)
-                || !TryReadDouble(fields[15], out packet.AngularVelocityY)
-                || !TryReadDouble(fields[16], out packet.AngularVelocityZ))
+                || !IsValidSessionToken(packet.SessionToken)
+                || !TryReadDouble(fields[5], out packet.PositionX)
+                || !TryReadDouble(fields[6], out packet.PositionY)
+                || !TryReadDouble(fields[7], out packet.PositionZ)
+                || !TryReadDouble(fields[8], out packet.VelocityX)
+                || !TryReadDouble(fields[9], out packet.VelocityY)
+                || !TryReadDouble(fields[10], out packet.VelocityZ)
+                || !TryReadDouble(fields[11], out packet.RotationX)
+                || !TryReadDouble(fields[12], out packet.RotationY)
+                || !TryReadDouble(fields[13], out packet.RotationZ)
+                || !TryReadDouble(fields[14], out packet.RotationW)
+                || !TryReadDouble(fields[15], out packet.AngularVelocityX)
+                || !TryReadDouble(fields[16], out packet.AngularVelocityY)
+                || !TryReadDouble(fields[17], out packet.AngularVelocityZ))
             {
                 return false;
             }
