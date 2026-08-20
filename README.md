@@ -6,7 +6,10 @@ TODO:
 Get a launch location selector
 
 
-Fix P0-4, P1-1,2,3,4
+P0-1-4 done
 
 
-pleaseeeeeeeeeeeeeeeeee add debug logs, im crying
+P1-1 done
+
+
+P1-2-4 not done
