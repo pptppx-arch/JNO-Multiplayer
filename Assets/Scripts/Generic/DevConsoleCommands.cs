@@ -63,14 +63,14 @@ namespace Assets.Scripts.Multiplayer
                 sessionCount = ServerConnection.Sessions.Count;
             }
 
-            return $"JNO Multiplayer: {role}{endpoint}; sessions number: {sessionCount}.";
+            return $"JNO Multiplayer: {role}{endpoint}; session number: {sessionCount}.";
         }
 
         private static void Host(int port)
         {
             if (!TryValidateFlightAndPort(port, out string error))
             {
-                Mod.LogWarning($"[MP Console] mp_host rejected: {error}");
+                Mod.LogWarning($"[MP Console] Could not start hosting: {error}");
                 return;
             }
 
@@ -88,13 +88,13 @@ namespace Assets.Scripts.Multiplayer
         {
             if (string.IsNullOrWhiteSpace(host))
             {
-                Mod.LogWarning("[MP Console] mp_join requires a host name or IP address.");
+                Mod.LogWarning("[MP Console] Joining a remote game requires a host name or IP address.");
                 return;
             }
 
             if (!TryValidateFlightAndPort(port, out string error))
             {
-                Mod.LogWarning($"[MP Console] mp_join rejected: {error}");
+                Mod.LogWarning($"[MP Console] Could not join remote game: {error}");
                 return;
             }
 
