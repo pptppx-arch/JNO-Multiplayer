@@ -2,7 +2,7 @@ namespace Assets.Scripts
 {
     using Ui.Designer;
     using UnityEngine;
-    using Scripts.Multiplayer;
+    using Assets.Scripts.Multiplayer;
     public class Mod : ModApi.Mods.GameMod
     {
         //Singleton instance of the mod
@@ -37,6 +37,7 @@ namespace Assets.Scripts
 
             MultiplayerJoinButton.Initialize();
             MultiplayerTelemetryRuntime.EnsureCreated();
+            DevConsoleCommands.Register();
         }
     }
 }
