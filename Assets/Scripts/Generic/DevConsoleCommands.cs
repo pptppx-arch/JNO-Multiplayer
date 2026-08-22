@@ -80,8 +80,8 @@ namespace Assets.Scripts.Multiplayer
                 return;
             }
 
-            Mod.Log($"[MP Console] Starting host on TCP/UDP port {port}.");
-            ServerConnection.Start(port);
+            Mod.Log($"[MP Console] Queuing host on TCP/UDP port {port} after flight readiness.");
+            MultiplayerTelemetryRuntime.RequestHostWhenFlightReady(port);
         }
 
         private static void Connect(string host, int port)
@@ -104,8 +104,8 @@ namespace Assets.Scripts.Multiplayer
                 return;
             }
 
-            Mod.Log($"[MP Console] Joining {host}:{port}.");
-            ClientConnection.Connect(host, port);
+            Mod.Log($"[MP Console] Queuing join to {host}:{port} after flight readiness.");
+            MultiplayerTelemetryRuntime.RequestJoinWhenFlightReady(host, port);
         }
 
         private static string Stop()
