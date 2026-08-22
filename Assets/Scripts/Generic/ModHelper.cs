@@ -1,3 +1,4 @@
+#if JNO_MULTIPLAYER_DEV_REMOTE_DEBUGGER
 namespace Assets.Scripts
 {
     using System;
@@ -186,3 +187,5 @@ namespace Assets.Scripts
         }
     }
 }
+
+#endif
