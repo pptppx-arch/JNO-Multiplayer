@@ -1,10 +1,11 @@
 namespace Assets.Scripts.Multiplayer.Telemetry
 {
+    using Assets.Scripts.Flight;
+    using Assets.Scripts.Flight.Sim;
+    using Assets.Scripts.Multiplayer.Threading;
     using System;
     using System.Diagnostics;
     using System.Net;
-    using Assets.Scripts.Flight;
-    using Assets.Scripts.Flight.Sim;
 
     /// <summary>
     /// One per connected client. Sends only the local craft's telemetry to the host and
@@ -24,8 +25,14 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         private bool _firstPacketPending;
         private bool _started;
         private readonly string _udpSessionToken;
+        private readonly ClientClockSynchronizer _clockSynchronizer;
 
-        public ClientTelemetryUpdater(IPEndPoint hostEndPoint, int localClientId, string udpSessionToken, double sendRateHz = 20.0)
+        public ClientTelemetryUpdater(
+            IPEndPoint hostEndPoint,
+            int localClientId,
+            string udpSessionToken,
+            ClientClockSynchronizer clockSynchronizer,
+            double sendRateHz = 20.0)
         {
             if (hostEndPoint == null) throw new ArgumentNullException(nameof(hostEndPoint));
             if (localClientId < 0) throw new ArgumentOutOfRangeException(nameof(localClientId));
@@ -37,6 +44,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
             _hostEndPoint = hostEndPoint;
             _localClientId = localClientId;
             _udpSessionToken = udpSessionToken;
+            _clockSynchronizer = clockSynchronizer;
             _sendIntervalSeconds = 1.0 / sendRateHz;
             _udp = new UdpNetworkHandler();
             _receiver = new TelemetryReceiver(_udp);
@@ -66,7 +74,12 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         {
             if (!_started) return;
 
-            _receiver.PumpRemoteProxies(_localClientId, deltaTime, _hostEndPoint, _udpSessionToken);
+            _receiver.PumpRemoteProxies(
+                _localClientId,
+                deltaTime,
+                _hostEndPoint,
+                _udpSessionToken,
+                _clockSynchronizer);
 
             double now = _clock.Elapsed.TotalSeconds;
             if (_firstPacketPending || now >= _nextSendTimeSeconds)

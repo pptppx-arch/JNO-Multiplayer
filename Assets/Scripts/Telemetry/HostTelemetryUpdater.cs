@@ -114,9 +114,13 @@ namespace Assets.Scripts.Multiplayer.Telemetry
             {
                 if (!EndpointsEqual(existingEndpoint, remoteEndPoint))
                 {
-                    Mod.LogWarning(
-                        $"[HostTelemetryUpdater] Rejected changed UDP endpoint for Client ID {packet.ClientId}.");
-                    return;
+                    // The preceding active-session, TCP-source-IP, and constant-time token
+                    // checks form the explicit rebind policy. NATs may change a UDP source
+                    // port mid-session; never accept a different IP address here.
+                    _udpEndPoints[packet.ClientId] = remoteEndPoint;
+                    Mod.Log(
+                        $"[HostTelemetryUpdater] Rebound authenticated UDP endpoint for " +
+                        $"Client ID {packet.ClientId}: {remoteEndPoint}.");
                 }
             }
             else

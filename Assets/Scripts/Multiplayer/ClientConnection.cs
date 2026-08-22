@@ -2,6 +2,7 @@ namespace Assets.Scripts.Multiplayer
 {
     using Assets.Scripts.Multiplayer.CraftData;
     using Assets.Scripts.Multiplayer.Telemetry;
+    using Assets.Scripts.Multiplayer.Threading;
     using Assets.Scripts.Threading;
     using System;
     using System.Net;
@@ -10,6 +11,15 @@ namespace Assets.Scripts.Multiplayer
 
     public static class ClientConnection
     {
+        private enum ClientConnectionState
+        {
+            Disconnected,
+            AwaitingAccepted,
+            Accepted,
+            CraftQueued,
+            Closing
+        }
+
         public static TcpClient ActiveClient { get; private set; }
         public static int LocalClientId { get; private set; } = -1;
         public static bool IsConnected => ActiveClient != null && ActiveClient.Connected;
@@ -20,6 +30,8 @@ namespace Assets.Scripts.Multiplayer
         private static bool _initialCraftUploadPending;
         private static SerializedTcpWriter _outboundWriter;
         private static string _udpSessionToken;
+        private static ClientClockSynchronizer _clockSynchronizer;
+        private static ClientConnectionState _state = ClientConnectionState.Disconnected;
 
         public static void SetLocalClientId(int id)
         {
@@ -32,9 +44,9 @@ namespace Assets.Scripts.Multiplayer
             hostIp = host;
             TcpPort = port;
 
-            if (IsConnected)
+            if (IsConnected || _state != ClientConnectionState.Disconnected)
             {
-                Mod.LogWarning("[ClientConnection] Already connected to a server.");
+                Mod.LogWarning("[ClientConnection] Already connecting or connected to a server.");
                 return;
             }
 
@@ -50,8 +62,9 @@ namespace Assets.Scripts.Multiplayer
                 ActiveClient = client;
                 _outboundWriter = new SerializedTcpWriter(client, "Host server");
                 _outboundWriter.Start();
+                _state = ClientConnectionState.AwaitingAccepted;
 
-                Mod.Log("[ClientConnection] Connected; waiting for host to accept conection.");
+                Mod.Log("[ClientConnection] Connected; waiting for host to accept connection.");
                 _ = StartListeningAsync(client);
             }
             else
@@ -69,6 +82,7 @@ namespace Assets.Scripts.Multiplayer
             if (!hadClientState) return;
 
             int localClientId = LocalClientId;
+            _state = ClientConnectionState.Closing;
             _initialCraftUploadPending = false;
 
             _telemetryUpdater?.Dispose();
@@ -92,8 +106,11 @@ namespace Assets.Scripts.Multiplayer
                 ActiveClient = null;
             }
 
+            _clockSynchronizer?.Stop();
+            _clockSynchronizer = null;
             LocalClientId = -1;
             _udpSessionToken = null;
+            _state = ClientConnectionState.Disconnected;
 
             // The runtime shutdown path clears proxies synchronously, while this queued cleanup
             // preserves the existing standalone-disconnect behavior.
@@ -141,6 +158,14 @@ namespace Assets.Scripts.Multiplayer
             {
                 if (metadata.StartsWith("SPAWN_CRAFT:"))
                 {
+                    if (_state != ClientConnectionState.Accepted
+                        && _state != ClientConnectionState.CraftQueued)
+                    {
+                        Mod.LogWarning("[ClientConnection] Rejected SPAWN_CRAFT before CONNECT_ACCEPTED.");
+                        Disconnect();
+                        return;
+                    }
+
                     if (int.TryParse(
                             metadata.Substring("SPAWN_CRAFT:".Length),
                             out int remoteClientId)
@@ -158,7 +183,8 @@ namespace Assets.Scripts.Multiplayer
                 switch (metadata)
                 {
                     case "CONNECT_ACCEPTED":
-                        if (!TryParseConnectAccepted(data, out int assignedId, out string udpSessionToken))
+                        if (_state != ClientConnectionState.AwaitingAccepted
+                            || !TryParseConnectAccepted(data, out int assignedId, out string udpSessionToken))
                         {
                             Mod.LogError("[ClientConnection] Invalid CONNECT_ACCEPTED client ID or UDP session token.");
                             Disconnect();
@@ -167,19 +193,35 @@ namespace Assets.Scripts.Multiplayer
 
                         LocalClientId = assignedId;
                         _udpSessionToken = udpSessionToken;
+                        _state = ClientConnectionState.Accepted;
+                        _clockSynchronizer = new ClientClockSynchronizer();
+                        _clockSynchronizer.Start();
                         _initialCraftUploadPending = true;
                         StartTelemetryAfterHandshake();
+                        RequestClockSync();
                         break;
 
                     case "CLIENT_DISCONNECTED":
-                        if (int.TryParse(data, out int departedClientId) && departedClientId >= 0)
+                        if ((_state == ClientConnectionState.Accepted
+                                || _state == ClientConnectionState.CraftQueued)
+                            && int.TryParse(data, out int departedClientId)
+                            && departedClientId >= 0)
                         {
                             MultiplayerThread.Post(() => CraftRegistry.DespawnCraft(departedClientId));
                         }
                         break;
 
+                    case "CLOCK_SYNC_RESPONSE":
+                        if (!TryConsumeClockSyncResponse(data))
+                        {
+                            Mod.LogWarning("[ClientConnection] Rejected invalid CLOCK_SYNC_RESPONSE.");
+                            Disconnect();
+                        }
+                        break;
+
                     default:
-                        Mod.LogWarning($"[ClientConnection] Unknown TCP metadata: {metadata}");
+                        Mod.LogWarning($"[ClientConnection] Rejected unknown TCP metadata: {metadata}");
+                        Disconnect();
                         break;
                 }
             }
@@ -219,6 +261,7 @@ namespace Assets.Scripts.Multiplayer
             }
 
             _initialCraftUploadPending = false;
+            _state = ClientConnectionState.CraftQueued;
             _ = SendInitialCraftXmlAsync(client, compressedXml);
         }
 
@@ -252,7 +295,8 @@ namespace Assets.Scripts.Multiplayer
                 _telemetryUpdater = new ClientTelemetryUpdater(
                     new IPEndPoint(hostAddress, TcpPort),
                     LocalClientId,
-                    _udpSessionToken);
+                    _udpSessionToken,
+                    _clockSynchronizer);
                 _telemetryUpdater.Start();
                 Mod.Log($"[ClientConnection] Client telemetry started for Client ID {LocalClientId}.");
             }
@@ -262,6 +306,62 @@ namespace Assets.Scripts.Multiplayer
                 _telemetryUpdater?.Dispose();
                 _telemetryUpdater = null;
             }
+        }
+
+        private static void RequestClockSync()
+        {
+            if ((_state != ClientConnectionState.Accepted
+                    && _state != ClientConnectionState.CraftQueued)
+                || _outboundWriter == null)
+            {
+                return;
+            }
+
+            long requestTimestamp = ClientClockSynchronizer.CreateRequestTimestamp();
+            if (!_outboundWriter.Enqueue(
+                    requestTimestamp.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "CLOCK_SYNC_REQUEST"))
+            {
+                Mod.LogWarning("[ClientConnection] Could not queue CLOCK_SYNC_REQUEST.");
+            }
+        }
+
+        private static bool TryConsumeClockSyncResponse(string data)
+        {
+            if ((_state != ClientConnectionState.Accepted
+                    && _state != ClientConnectionState.CraftQueued)
+                || _clockSynchronizer == null
+                || string.IsNullOrEmpty(data))
+            {
+                return false;
+            }
+
+            string[] fields = data.Split('|');
+            if (fields.Length != 3
+                || !long.TryParse(
+                    fields[0],
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out long requestTimestamp)
+                || !long.TryParse(
+                    fields[1],
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out long serverTick)
+                || !int.TryParse(
+                    fields[2],
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out int serverTickRate)
+                || requestTimestamp <= 0
+                || serverTick < 0
+                || serverTickRate <= 0)
+            {
+                return false;
+            }
+
+            _clockSynchronizer.ObserveRoundTrip(requestTimestamp, serverTick, serverTickRate);
+            return true;
         }
 
         private static IPAddress ResolveHostAddress(string host)

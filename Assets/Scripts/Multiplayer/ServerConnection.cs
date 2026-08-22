@@ -13,6 +13,15 @@ namespace Assets.Scripts.Multiplayer
     using System.Security.Cryptography;
     //RAH RAH RAH
 
+    public enum ClientSessionState
+    {
+        AwaitingConnect,
+        Accepted,
+        CraftReceiving,
+        Active,
+        Closing
+    }
+
     public sealed class ClientSession : IDisposable
     {
         public int Id { get; set; }
@@ -20,6 +29,7 @@ namespace Assets.Scripts.Multiplayer
         public string CraftXml { get; set; }
         public bool IsHost => Client == null;
         public string UdpSessionToken { get; set; }
+        public ClientSessionState State { get; set; }
 
         private SerializedTcpWriter _writer;
 
@@ -41,6 +51,7 @@ namespace Assets.Scripts.Multiplayer
             _writer?.Dispose();
             _writer = null;
 
+            State = ClientSessionState.Closing;
             Client?.Dispose();
             Client = null;
         }
@@ -97,7 +108,8 @@ namespace Assets.Scripts.Multiplayer
                     {
                         Id = HostClientId,
                         Client = null,
-                        CraftXml = string.Empty
+                        CraftXml = string.Empty,
+                        State = ClientSessionState.Active
                     });
                 }
 
@@ -210,9 +222,10 @@ namespace Assets.Scripts.Multiplayer
             {
                 ClientSession session = Sessions.Find(s => s.Id == clientId);
                 return session != null
-                    && !session.IsHost
-                    && session.Client != null
-                    && session.Client.Connected;
+    && !session.IsHost
+    && session.State == ClientSessionState.Active
+    && session.Client != null
+    && session.Client.Connected;
             }
         }
 
@@ -278,8 +291,13 @@ namespace Assets.Scripts.Multiplayer
                                 await HandleClientCraftDataAsync(client, data);
                                 break;
 
+                            case "CLOCK_SYNC_REQUEST":
+                                await HandleClockSyncRequestAsync(client, data);
+                                break;
+
                             default:
-                                Mod.LogWarning($"[ServerHost] Unknown TCP metadata: {metadata}");
+                                Mod.LogWarning($"[ServerHost] Rejected unknown TCP metadata: {metadata}");
+                                client.Close();
                                 break;
                         }
                     }
@@ -314,8 +332,14 @@ namespace Assets.Scripts.Multiplayer
 
         private static Task HandleConnectAsync(TcpClient client)
         {
-            ClientSession session;
+            if (FindSession(client) != null)
+            {
+                Mod.LogWarning("[ServerHost] Rejected repeated CONNECT frame.");
+                client.Close();
+                return Task.CompletedTask;
+            }
 
+            ClientSession session;
             lock (Sessions)
             {
                 int assignedId = ++_nextClientId;
@@ -325,7 +349,8 @@ namespace Assets.Scripts.Multiplayer
                     Id = assignedId,
                     Client = client,
                     CraftXml = string.Empty,
-                    UdpSessionToken = CreateUdpSessionToken()
+                    UdpSessionToken = CreateUdpSessionToken(),
+                    State = ClientSessionState.Accepted
                 };
 
                 Sessions.Add(session);
@@ -349,6 +374,42 @@ namespace Assets.Scripts.Multiplayer
             return Task.CompletedTask;
         }
 
+
+        private static Task HandleClockSyncRequestAsync(TcpClient client, string data)
+        {
+            ClientSession session = FindSession(client);
+            if (session == null
+                || (session.State != ClientSessionState.Accepted
+                    && session.State != ClientSessionState.CraftReceiving
+                    && session.State != ClientSessionState.Active)
+                || !long.TryParse(
+                    data,
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out long clientRequestTimestamp)
+                || clientRequestTimestamp <= 0)
+            {
+                Mod.LogWarning("[ServerHost] Rejected invalid CLOCK_SYNC_REQUEST.");
+                client.Close();
+                return Task.CompletedTask;
+            }
+
+            ServerClockSnapshot? snapshot = GetClockSnapshot();
+            if (!snapshot.HasValue)
+            {
+                return Task.CompletedTask;
+            }
+
+            string response = clientRequestTimestamp.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "|" + snapshot.Value.Tick.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "|" + snapshot.Value.TickRate.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (!session.EnqueuePacket(response, "CLOCK_SYNC_RESPONSE"))
+            {
+                Mod.LogWarning($"[ServerHost] Could not queue CLOCK_SYNC_RESPONSE for Client ID {session.Id}.");
+            }
+
+            return Task.CompletedTask;
+        }
 
         private static void EnsureHostTelemetryStarted()
         {
@@ -374,17 +435,17 @@ namespace Assets.Scripts.Multiplayer
         #region Craft XML transfer
         private static async Task HandleClientCraftDataAsync(TcpClient client, string data)
         {
-            int clientId = GetClientId(client);
-            if (clientId == -1) return;
-
-            lock (Sessions)
+            ClientSession joiningSession = FindSession(client);
+            if (joiningSession == null || joiningSession.State != ClientSessionState.Accepted)
             {
-                ClientSession session = Sessions.Find(s => s.Id == clientId);
-                if (session != null)
-                {
-                    session.CraftXml = data;
-                }
+                Mod.LogWarning("[ServerHost] Rejected CLIENT_CRAFT_DATA outside the accepted handshake state.");
+                client.Close();
+                return;
             }
+
+            int clientId = joiningSession.Id;
+            joiningSession.State = ClientSessionState.CraftReceiving;
+            joiningSession.CraftXml = data;
 
             // The actual Juno spawn runs when MultiplayerThread.Pump executes on Update().
             CraftNode spawnedProxy = await ReceiveCraftData.ProcessAndSpawnAsync(clientId, data);
@@ -412,12 +473,28 @@ namespace Assets.Scripts.Multiplayer
                 }
             }
 
-            foreach (KeyValuePair<int, string> existingCraft in existingCrafts)
+            // Resolve once: a disconnect after this point cannot create a null dereference
+            // in the replay loop, and each frame still goes through the serialized writer.
+            joiningSession = FindSession(client);
+            if (joiningSession == null
+                || joiningSession.State != ClientSessionState.CraftReceiving)
             {
-                var _client = FindSession(client);
-                _client.EnqueuePacket(existingCraft.Value, $"SPAWN_CRAFT:{existingCraft.Key}");
+                return;
             }
 
+            foreach (KeyValuePair<int, string> existingCraft in existingCrafts)
+            {
+                if (!joiningSession.EnqueuePacket(
+                        existingCraft.Value,
+                        $"SPAWN_CRAFT:{existingCraft.Key}"))
+                {
+                    Mod.LogWarning(
+                        $"[ServerHost] Could not queue existing craft {existingCraft.Key} " +
+                        $"for Client ID {joiningSession.Id}.");
+                }
+            }
+
+            joiningSession.State = ClientSessionState.Active;
             SendDataToClients(data, $"SPAWN_CRAFT:{clientId}", excludeClientId: clientId);
         }
         #endregion
@@ -427,12 +504,17 @@ namespace Assets.Scripts.Multiplayer
         public static void SendDataToClients(string data, string metadata, int excludeClientId = -1)
         {
             var destinations = new List<ClientSession>();
-            lock (Sessions) 
+            lock (Sessions)
             {
                 foreach (ClientSession session in Sessions)
                 {
                     if (session.Id == excludeClientId || session.IsHost) continue;
-                    if (session.Client != null && session.Client.Connected) destinations.Add(session);
+                    if (session.State == ClientSessionState.Active
+                        && session.Client != null
+                        && session.Client.Connected)
+                    {
+                        destinations.Add(session);
+                    }
                 }
             }
 
