@@ -40,6 +40,9 @@ namespace Assets.Scripts.Multiplayer
         {
             _writer?.Dispose();
             _writer = null;
+
+            Client?.Dispose();
+            Client = null;
         }
     }
 
@@ -157,7 +160,7 @@ namespace Assets.Scripts.Multiplayer
                 {
                     try
                     {
-                        session.Client?.Dispose();
+                        session.Dispose();
                     }
                     catch (Exception ex)
                     {
