@@ -33,51 +33,55 @@ namespace Assets.Scripts.Ui.Designer
             var ipElement = this._controller.XmlLayout.GetElementById("ipInput");
             var portElement = this._controller.XmlLayout.GetElementById("portInput");
 
-            string host = ipElement != null ? ipElement.GetValue() : "";
-            string portStr = portElement != null ? portElement.GetValue() : "25555";
-            int.TryParse(portStr, out int port);
-
-            if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(portStr))
+            string host = ipElement == null ? string.Empty : (ipElement.GetValue() ?? string.Empty).Trim();
+            string portStr = portElement == null ? string.Empty : portElement.GetValue();
+            if (string.IsNullOrWhiteSpace(host) || !TryReadPort(portStr, out int port))
             {
-                Game.Instance.Designer.DesignerUi.ShowMessage("Please enter a valid IP address and port.", 3f);
+                Game.Instance.Designer.DesignerUi.ShowMessage(
+                    "Enter a host address and a port from 1 to 65535.",
+                    3f);
                 return;
-            }   
+            }
 
-            Mod.Log($"[UI] Connecting to {host}:{port}");
-
+            Mod.Log($"[UI] Queuing join to {host}:{port} after flight readiness.");
             TryConnect(host, port);
         }
 
         public void OnHostClicked()
         {
             var portElement = this._controller.XmlLayout.GetElementById("portInput");
-            string portStr = portElement != null ? portElement.GetValue() : "25555";
-            int.TryParse(portStr, out int port);
-
-            if (string.IsNullOrEmpty(portStr))
+            string portStr = portElement == null ? string.Empty : portElement.GetValue();
+            if (!TryReadPort(portStr, out int port))
             {
-                Game.Instance.Designer.DesignerUi.ShowMessage("Please enter a valid port.", 3f);
+                Game.Instance.Designer.DesignerUi.ShowMessage(
+                    "Enter a port from 1 to 65535.",
+                    3f);
                 return;
             }
 
-            Mod.Log($"[UI] Hosting on port {port}");
-
+            Mod.Log($"[UI] Queuing host on port {port} after flight readiness.");
             TryConnect(null, port);
         }
 
         public void TryConnect(string host, int port)
         {
-            var designer = Game.Instance.Designer;
-            designer.BeginFlight();
+            Game.Instance.Designer.BeginFlight();
             if (host == null)
             {
-                ServerConnection.Start(port);
+                MultiplayerTelemetryRuntime.RequestHostWhenFlightReady(port);
+                return;
             }
-            else
-            {
-                ClientConnection.Connect(host, port);
-                ModHelper.Connect(host, 4444);
-            }
+
+            MultiplayerTelemetryRuntime.RequestJoinWhenFlightReady(host, port);
+
+#if JNO_MULTIPLAYER_DEV_REMOTE_DEBUGGER
+            ModHelper.Connect(host, 4444);
+#endif
+        }
+
+        private static bool TryReadPort(string value, out int port)
+        {
+            return int.TryParse(value, out port) && port >= 1 && port <= 65535;
         }
     }
 }
