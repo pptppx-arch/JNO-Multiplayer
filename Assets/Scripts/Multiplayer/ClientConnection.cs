@@ -2,7 +2,7 @@ namespace Assets.Scripts.Multiplayer
 {
     using Assets.Scripts.Multiplayer.CraftData;
     using Assets.Scripts.Multiplayer.Telemetry;
-    using Assets.Scripts.Multiplayer.Threading;
+    using Assets.Scripts.Clock;
     using Assets.Scripts.Threading;
     using System;
     using System.Net;

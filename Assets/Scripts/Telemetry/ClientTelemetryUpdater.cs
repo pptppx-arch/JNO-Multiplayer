@@ -2,7 +2,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
 {
     using Assets.Scripts.Flight;
     using Assets.Scripts.Flight.Sim;
-    using Assets.Scripts.Multiplayer.Threading;
+    using Assets.Scripts.Clock;
     using System;
     using System.Diagnostics;
     using System.Net;

@@ -4,6 +4,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
     using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Net;
+    using Assets.Scripts.Clock;
     using Assets.Scripts.Flight.Sim;
     using Assets.Scripts.Multiplayer;
 
@@ -22,7 +23,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         private readonly Dictionary<int, uint> _lastClientSequence = new Dictionary<int, uint>();
         private readonly ConcurrentQueue<int> _pendingClientRemovals = new ConcurrentQueue<int>();
         private readonly int _relayEveryTicks;
-
+        private readonly float _hostTickDeltaSeconds;
         private long _currentHostTick;
         private bool _started;
 
@@ -36,6 +37,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
             _receiver = new TelemetryReceiver(_udp);
             _hostPackager = new LocalTelemetryPackager(hostClientId);
             _relayEveryTicks = Math.Max(1, (int)Math.Round(hostTickRate / relayRateHz));
+            _hostTickDeltaSeconds = 1f / hostTickRate;
         }
 
         public void Start()
@@ -145,7 +147,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
             CraftNode hostSideProxy = CraftRegistry.GetCraft(packet.ClientId);
             if (hostSideProxy != null)
             {
-                TelemetryReceiver.ApplyToRemoteProxy(hostSideProxy, packet, 1f / 60f);
+                TelemetryReceiver.ApplyToRemoteProxy(hostSideProxy, packet, _hostTickDeltaSeconds);
             }
         }
 
