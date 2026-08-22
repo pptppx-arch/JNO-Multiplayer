@@ -17,6 +17,9 @@ namespace Assets.Scripts.Multiplayer
         private static MultiplayerTelemetryRuntime _instance;
         private IFlightScene _observedFlightScene;
         private bool _isShuttingDown;
+        private bool _pendingHostStart;
+        private string _pendingJoinHost;
+        private int _pendingStartPort;
 
         public static void EnsureCreated()
         {
@@ -63,8 +66,91 @@ namespace Assets.Scripts.Multiplayer
             ServerConnection.PumpClock();
             ClientConnection.PumpTelemetry(Time.deltaTime);
 
-            // 5. ewuifewifunwi shutdown
+            // 5. Observe scene transitions, then start only after Juno has built a local craft.
             ObserveFlightScene();
+            TryStartPendingSessionWhenFlightReady();
+        }
+
+        /// <summary>
+        /// Queues hosting until a flight scene and local craft are ready on the game thread.
+        /// </summary>
+        public static void RequestHostWhenFlightReady(int port)
+        {
+            RequestStartWhenFlightReady(null, port);
+        }
+
+        /// <summary>
+        /// Queues joining until a flight scene and local craft are ready on the game thread.
+        /// </summary>
+        public static void RequestJoinWhenFlightReady(string host, int port)
+        {
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                Mod.LogWarning("[MultiplayerTelemetryRuntime] Cannot queue a join without a host address.");
+                return;
+            }
+
+            RequestStartWhenFlightReady(host.Trim(), port);
+        }
+
+        private static void RequestStartWhenFlightReady(string host, int port)
+        {
+            if (port <= 0 || port > 65535)
+            {
+                Mod.LogWarning("[MultiplayerTelemetryRuntime] Cannot queue a port outside 1..65535.");
+                return;
+            }
+
+            EnsureCreated();
+            if (_instance == null) return;
+            if (ServerConnection.IsHosting || ClientConnection.IsConnected)
+            {
+                Mod.LogWarning("[MultiplayerTelemetryRuntime] Stop the active multiplayer session before starting another.");
+                return;
+            }
+
+            _instance._pendingHostStart = string.IsNullOrEmpty(host);
+            _instance._pendingJoinHost = host;
+            _instance._pendingStartPort = port;
+            Mod.Log($"[MultiplayerTelemetryRuntime] Queued " +
+                $"{(_instance._pendingHostStart ? "host" : "join")} until local flight craft is ready.");
+        }
+
+        private void TryStartPendingSessionWhenFlightReady()
+        {
+            if ((!_pendingHostStart && string.IsNullOrEmpty(_pendingJoinHost))
+                || ServerConnection.IsHosting
+                || ClientConnection.IsConnected)
+            {
+                return;
+            }
+
+            FlightSceneScript flightScene = FlightSceneScript.Instance;
+            if (flightScene == null || flightScene.CraftNode == null)
+            {
+                return;
+            }
+
+            bool startHost = _pendingHostStart;
+            string joinHost = _pendingJoinHost;
+            int port = _pendingStartPort;
+            ClearPendingStart();
+
+            if (startHost)
+            {
+                ServerConnection.Start(port);
+            }
+            else
+            {
+                ClientConnection.Connect(joinHost, port);
+            }
+        }
+
+        private void ClearPendingStart()
+        {
+            _pendingHostStart = false;
+            _pendingJoinHost = null;
+            _pendingStartPort = 0;
         }
 
         private static void RegisterFlightReadyLocalCraft()
@@ -134,6 +220,8 @@ namespace Assets.Scripts.Multiplayer
 
             try
             {
+                ClearPendingStart();
+
                 // Discard old spawn and proxy work before shutting down. Otherwise it can run
                 // after cleanup and recreate a remote proxy in the next frame or scene.
                 int cancelledBeforeShutdown = MultiplayerThread.CancelAllPending();
