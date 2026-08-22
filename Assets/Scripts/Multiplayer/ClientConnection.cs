@@ -62,36 +62,41 @@ namespace Assets.Scripts.Multiplayer
 
         public static void Disconnect()
         {
+            bool hadClientState = ActiveClient != null
+                || _outboundWriter != null
+                || _telemetryUpdater != null
+                || LocalClientId >= 0;
+            if (!hadClientState) return;
+
             int localClientId = LocalClientId;
             _initialCraftUploadPending = false;
 
             _telemetryUpdater?.Dispose();
             _telemetryUpdater = null;
 
-            if (ActiveClient != null)
+            try
             {
-                try
-                {
-                    _outboundWriter?.Dispose();
-                    _outboundWriter = null;
-                    ActiveClient = null;
-                    ActiveClient?.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    Mod.LogError($"[ClientConnection] TCP disconnect error: {ex.Message}");
-                }
-                finally
-                {
-                    ActiveClient = null;
-                }
+                _outboundWriter?.Dispose();
+                _outboundWriter = null;
+
+                TcpClient client = ActiveClient;
+                ActiveClient = null;
+                client?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Mod.LogError($"[ClientConnection] TCP disconnect error: {ex.Message}");
+            }
+            finally
+            {
+                ActiveClient = null;
             }
 
             LocalClientId = -1;
             _udpSessionToken = null;
 
-            // This destroys remote proxies on the next game-thread update while preserving
-            // the local Juno-owned craft identified before LocalClientId was reset.
+            // The runtime shutdown path clears proxies synchronously, while this queued cleanup
+            // preserves the existing standalone-disconnect behavior.
             MultiplayerThread.Post(() => CraftRegistry.ClearAllExcept(localClientId));
             Mod.Log("[ClientConnection] Disconnected; client telemetry stopped.");
         }
