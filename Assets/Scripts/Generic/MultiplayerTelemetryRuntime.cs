@@ -108,45 +108,66 @@ namespace Assets.Scripts.Multiplayer
             }
         }
 
-        private void OnFlightEnded(object sender, FlightEndedEventArgs args)
+        /// <summary>
+        /// Stops the active host or client session from a game-thread caller, including all
+        /// telemetry, TCP writers/sockets, queued multiplayer work, and remote craft proxies.
+        /// </summary>
+        public static void RequestShutdown()
         {
-            ShutdownForFlightExit();
+            EnsureCreated();
+            _instance?.ShutdownMultiplayer("MP.Stop", false);
         }
 
-        private void ShutdownForFlightExit()
+        private void OnFlightEnded(object sender, FlightEndedEventArgs args)
+        {
+            ShutdownMultiplayer("flight exit", true);
+        }
+
+        private void ShutdownMultiplayer(string reason, bool unsubscribeFromFlight)
         {
             if (_isShuttingDown) return;
             _isShuttingDown = true;
 
+            int preservedClientId = ServerConnection.IsHosting
+                ? ServerConnection.HostClientId
+                : ClientConnection.LocalClientId;
+
             try
             {
-                bool wasHosting = ServerConnection.IsHosting;
-                bool hadClientSession = ClientConnection.IsConnected
-                    || ClientConnection.LocalClientId >= 0;
+                // Discard old spawn and proxy work before shutting down. Otherwise it can run
+                // after cleanup and recreate a remote proxy in the next frame or scene.
+                int cancelledBeforeShutdown = MultiplayerThread.CancelAllPending();
 
-                // Stop sockets and telemetry before removing craft representations.
-                if (wasHosting)
+                if (ServerConnection.IsHosting)
                 {
                     ServerConnection.Stop();
                 }
 
-                if (hadClientSession)
-                {
-                    ClientConnection.Disconnect();
-                }
+                // Disconnect is idempotent and also handles a TCP connection that exists before
+                // CONNECT_ACCEPTED assigns LocalClientId.
+                ClientConnection.Disconnect();
 
-                // ServerConnection.Stop/ClientConnection.Disconnect already queue registry cleanup.
-                // Cancel older spawn work first so no stale proxy is created in the next scene.
-                int cancelledWork = MultiplayerThread.CancelAllPending();
-                Mod.Log($"[MultiplayerTelemetryRuntime] Flight ended; multiplayer shutdown complete. Cancelled queued work: {cancelledWork}.");
+                // This method runs from Juno's game-thread lifecycle or dev-console callback.
+                // Clear synchronously so MP.Stop and flight exit cannot leave remote proxies behind.
+                CraftRegistry.ClearAllExcept(preservedClientId);
+
+                // Stop/Disconnect schedule their normal asynchronous cleanup too. It is now
+                // redundant and unsafe after a rapid reconnect, so discard it with any late work.
+                int cancelledAfterShutdown = MultiplayerThread.CancelAllPending();
+                Mod.Log($"[MultiplayerTelemetryRuntime] {reason}: multiplayer shutdown complete. " +
+                    $"Cancelled queued work: {cancelledBeforeShutdown + cancelledAfterShutdown}.");
             }
             catch (Exception ex)
             {
-                Mod.LogError($"[MultiplayerTelemetryRuntime] Flight-exit shutdown error: {ex.Message}");
+                Mod.LogError($"[MultiplayerTelemetryRuntime] {reason} shutdown error: {ex.Message}");
             }
             finally
             {
-                UnsubscribeFlightEnded();
+                if (unsubscribeFromFlight)
+                {
+                    UnsubscribeFlightEnded();
+                }
+
                 _isShuttingDown = false;
             }
         }
