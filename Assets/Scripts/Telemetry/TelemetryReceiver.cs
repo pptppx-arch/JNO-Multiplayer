@@ -66,30 +66,45 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         /// CraftRegistry and applies a smoothed kinematic Rigidbody pose. Packets for
         /// the local client or stale/out-of-order sequences are ignored.
         /// </summary>
-        public int PumpRemoteProxies(int localClientId, float deltaTime, IPEndPoint expectedHostEndPoint, string expectedSessionToken, float positionLerpRate = 12f, float rotationSlerpRate = 12f)
+        public int PumpRemoteProxies(
+            int localClientId,
+            float deltaTime,
+            IPEndPoint expectedHostEndPoint,
+            string expectedSessionToken,
+            float positionLerpRate = 12f,
+            float rotationSlerpRate = 12f)
         {
             if (expectedHostEndPoint == null) throw new ArgumentNullException(nameof(expectedHostEndPoint));
             if (!TelemetryPacket.IsValidSessionToken(expectedSessionToken))
             {
                 throw new ArgumentException("A valid UDP session token is required.", nameof(expectedSessionToken));
             }
+
             int applied = 0;
             while (_pending.TryDequeue(out ReceivedTelemetry received))
             {
-                TelemetryPacket packet =    received.Packet;
+                TelemetryPacket packet = received.Packet;
 
-                if (!EndpointsEqual(received.RemoteEndPoint, expectedHostEndPoint) || !TelemetryPacket.TokensEqual(expectedSessionToken, packet.SessionToken))
+                if (!EndpointsEqual(received.RemoteEndPoint, expectedHostEndPoint)
+                    || !TelemetryPacket.TokensEqual(expectedSessionToken, packet.SessionToken))
                 {
                     // Do not log each rejected UDP packet; otherwise a sender can create log spam.
                     continue;
                 }
-                
+
                 if (packet.ClientId == localClientId || !IsNewSequence(packet.ClientId, packet.Sequence))
                 {
                     continue;
                 }
 
-                LastObservedHostTick = System.Math.Max(LastObservedHostTick, packet.HostTick);
+                // Defense in depth: only host-validated packets should arrive here, but never
+                // allow an unsafe finite value to reach Unity float conversion.
+                if (!TelemetryValidator.TryValidateAndNormalize(ref packet, out _))
+                {
+                    continue;
+                }
+
+                LastObservedHostTick = Math.Max(LastObservedHostTick, packet.HostTick);
 
                 CraftNode remoteCraft = CraftRegistry.GetCraft(packet.ClientId);
                 if (remoteCraft == null)
@@ -109,14 +124,24 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         }
 
         /// <summary>
-        /// Applies a packet to a spawned remote craft. ICraftDebris exposes the Unity
-        /// Rigidbody used by the proxy. This assumes the packet coordinates are in the
-        /// same reference frame represented by that Rigidbody; place any Juno-specific
-        /// PCI-to-local conversion immediately before targetPosition if your build
-        /// requires one.
+        /// Applies a validated packet to a spawned remote craft. The host performs the
+        /// authoritative validation; this method repeats it to prevent unsafe float casts.
+        /// Insert an explicit PCI-to-local conversion immediately before targetPosition
+        /// when the wire-frame contract is finalized.
         /// </summary>
-        public static bool ApplyToRemoteProxy(CraftNode remoteCraft, TelemetryPacket packet, float deltaTime, float positionLerpRate = 12f, float rotationSlerpRate = 12f)
+        public static bool ApplyToRemoteProxy(
+            CraftNode remoteCraft,
+            TelemetryPacket packet,
+            float deltaTime,
+            float positionLerpRate = 12f,
+            float rotationSlerpRate = 12f)
         {
+            if (remoteCraft == null
+                || !TelemetryValidator.TryValidateAndNormalize(ref packet, out _))
+            {
+                return false;
+            }
+
             ICraftDebris craftDebris = remoteCraft as ICraftDebris;
             Rigidbody body = craftDebris == null ? null : craftDebris.RigidBody;
             if (body == null)
@@ -137,15 +162,18 @@ namespace Assets.Scripts.Multiplayer.Telemetry
                 (float)packet.RotationZ,
                 (float)packet.RotationW);
 
-            float positionT = Mathf.Clamp01(positionLerpRate * System.Math.Max(0f, deltaTime));
-            float rotationT = Mathf.Clamp01(rotationSlerpRate * System.Math.Max(0f, deltaTime));
+            float positionT = Mathf.Clamp01(positionLerpRate * Math.Max(0f, deltaTime));
+            float rotationT = Mathf.Clamp01(rotationSlerpRate * Math.Max(0f, deltaTime));
             body.position = Vector3.Lerp(body.position, targetPosition, positionT);
             body.rotation = Quaternion.Slerp(body.rotation, targetRotation, rotationT);
 
             // Rigidbody velocity fields retain the newest received motion information
             // for later extrapolation/collision handling, while isKinematic prevents the
             // remote proxy from participating in local dynamic simulation.
-            body.velocity = new Vector3((float)packet.VelocityX, (float)packet.VelocityY, (float)packet.VelocityZ);
+            body.velocity = new Vector3(
+                (float)packet.VelocityX,
+                (float)packet.VelocityY,
+                (float)packet.VelocityZ);
             body.angularVelocity = new Vector3(
                 (float)packet.AngularVelocityX,
                 (float)packet.AngularVelocityY,
@@ -200,6 +228,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
                 RemoteEndPoint = remoteEndPoint;
             }
         }
+
         private static bool EndpointsEqual(IPEndPoint actual, IPEndPoint expected)
         {
             return actual != null

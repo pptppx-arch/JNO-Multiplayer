@@ -9,8 +9,8 @@ namespace Assets.Scripts.Multiplayer.Telemetry
 
     /// <summary>
     /// One host-wide UDP telemetry service for the whole session. It receives all
-    /// clients on one UDP port, binds each TCP-assigned client ID to its first accepted
-    /// UDP endpoint, and relays each latest state to all other registered endpoints.
+    /// clients on one UDP port, validates their state, binds each TCP-assigned client ID
+    /// to its first accepted UDP endpoint, and relays latest validated state.
     /// </summary>
     public sealed class HostTelemetryUpdater : IDisposable
     {
@@ -35,7 +35,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
             _udp = new UdpNetworkHandler(udpPort);
             _receiver = new TelemetryReceiver(_udp);
             _hostPackager = new LocalTelemetryPackager(hostClientId);
-            _relayEveryTicks = System.Math.Max(1, (int)System.Math.Round(hostTickRate / relayRateHz));
+            _relayEveryTicks = Math.Max(1, (int)Math.Round(hostTickRate / relayRateHz));
         }
 
         public void Start()
@@ -84,16 +84,32 @@ namespace Assets.Scripts.Multiplayer.Telemetry
 
         private void AcceptClientPacket(TelemetryPacket packet, IPEndPoint remoteEndPoint)
         {
-            // Packet client ID must map to an active TCP session and the source IP must
-            // match that session's TCP peer. This prevents a random internet sender from
-            // claiming another assigned ID. The UDP source port is learned once.
-            if (!ServerConnection.IsRemoteSessionActive(packet.ClientId) || !ServerConnection.IsExpectedClientAddress(packet.ClientId, remoteEndPoint.Address) || !ServerConnection.IsExpectedUdpToken(packet.ClientId, packet.SessionToken))
+            if (remoteEndPoint == null)
+            {
+                return;
+            }
+
+            // Authenticate the sender before it is allowed to establish an endpoint.
+            if (!ServerConnection.IsRemoteSessionActive(packet.ClientId)
+                || !ServerConnection.IsExpectedClientAddress(packet.ClientId, remoteEndPoint.Address)
+                || !ServerConnection.IsExpectedUdpToken(packet.ClientId, packet.SessionToken))
             {
                 Mod.LogWarning(
                     $"[HostTelemetryUpdater] Rejected telemetry with invalid session, source IP, or UDP token " +
                     $"for Client ID {packet.ClientId}.");
                 return;
             }
+
+            // P1-3: host-authoritative physical envelope and normalized rotation.
+            if (!TelemetryValidator.TryValidateAndNormalize(ref packet, out string validationReason))
+            {
+                Mod.LogWarning(
+                    $"[HostTelemetryUpdater] Rejected unsafe telemetry for Client ID {packet.ClientId}: " +
+                    validationReason + ".");
+                return;
+            }
+
+            // Only authenticated and physically sane traffic may register a UDP endpoint.
             if (_udpEndPoints.TryGetValue(packet.ClientId, out IPEndPoint existingEndpoint))
             {
                 if (!EndpointsEqual(existingEndpoint, remoteEndPoint))
@@ -108,20 +124,20 @@ namespace Assets.Scripts.Multiplayer.Telemetry
                 _udpEndPoints[packet.ClientId] = remoteEndPoint;
                 Mod.Log(
                     $"[HostTelemetryUpdater] Registered UDP endpoint for Client ID {packet.ClientId}: {remoteEndPoint}.");
+            }
 
-            if (_lastClientSequence.TryGetValue(packet.ClientId, out uint lastSequence) && !IsNewerSequence(packet.Sequence, lastSequence))
+            if (_lastClientSequence.TryGetValue(packet.ClientId, out uint lastSequence)
+                && !IsNewerSequence(packet.Sequence, lastSequence))
             {
                 return;
             }
 
-            // The host is authoritative for the packet's simulation tick; a client can
-            // report its last seen host tick, but it cannot choose the relayed tick.
+            // The host owns the relay tick; clients cannot choose it.
             packet.HostTick = _currentHostTick;
             _lastClientSequence[packet.ClientId] = packet.Sequence;
             _latestState[packet.ClientId] = packet;
 
-            // The host also has a locally spawned kinematic proxy for each remote
-            // client. Update that proxy on the host game thread before relaying state.
+            // The host-side proxy receives only the host-validated and normalized state.
             CraftNode hostSideProxy = CraftRegistry.GetCraft(packet.ClientId);
             if (hostSideProxy != null)
             {
@@ -142,10 +158,19 @@ namespace Assets.Scripts.Multiplayer.Telemetry
         private void PackageHostState(long hostTick)
         {
             CraftNode hostCraft = CraftRegistry.GetCraft(ServerConnection.HostClientId);
-            if (hostCraft != null && _hostPackager.TryPackage(hostCraft, hostTick, out TelemetryPacket hostPacket))
+            if (hostCraft == null
+                || !_hostPackager.TryPackage(hostCraft, hostTick, out TelemetryPacket hostPacket))
             {
-                _latestState[hostPacket.ClientId] = hostPacket;
+                return;
             }
+
+            if (!TelemetryValidator.TryValidateAndNormalize(ref hostPacket, out string validationReason))
+            {
+                Mod.LogWarning("[HostTelemetryUpdater] Local host telemetry is outside the configured envelope: " + validationReason + ".");
+                return;
+            }
+
+            _latestState[hostPacket.ClientId] = hostPacket;
         }
 
         private void RelayLatestStates()
@@ -167,6 +192,7 @@ namespace Assets.Scripts.Multiplayer.Telemetry
                 }
             }
         }
+
         private static string GetUdpSessionToken(int clientId)
         {
             lock (ServerConnection.Sessions)
@@ -175,9 +201,12 @@ namespace Assets.Scripts.Multiplayer.Telemetry
                 return session == null ? string.Empty : session.UdpSessionToken;
             }
         }
+
         private static bool EndpointsEqual(IPEndPoint left, IPEndPoint right)
         {
-            return left != null && right != null && left.Port == right.Port && left.Address.Equals(right.Address);
+            return left != null && right != null
+                && left.Port == right.Port
+                && left.Address.Equals(right.Address);
         }
 
         private static bool IsNewerSequence(uint candidate, uint previous)
