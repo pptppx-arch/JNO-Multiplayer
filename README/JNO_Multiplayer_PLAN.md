@@ -1,6 +1,6 @@
 # JNO Multiplayer Plan
 
-**Current verified repository revision:** `5fedd6f` on `master`.
+**Current verified repository revision:** `03ec22b` on `master` (Aug. 23, 2026).
 
 ## Project rule
 
@@ -19,6 +19,7 @@ When someone says a change is finished or pushed, first fetch `master` and inspe
 | Flight readiness, port validation, development debugger gate | Source-complete | Build/UI test pending. |
 | P2-2 host tick delta | Source-complete | Uses the instance-derived `_hostTickDeltaSeconds`. |
 | P2-4 UI validation, P2-5 placeholders, P2-6 namespace import | Done in source | Verify in target mod build. |
+| Main-craft XML refresh | Source-complete | The active flight craft is hashed once per second; a changed XML payload is reliably sent, cached by the host, relayed, and used to replace the single remote kinematic proxy. Detached pieces remain out of scope. |
 
 ## Next gate — build and single-rig checks
 
@@ -31,6 +32,7 @@ These do not require another computer.
 - [ ] Verify `MP.Host <port>` and `MP.Connect <host> <port>` queue until a local flight craft exists.
 - [ ] Verify `MP.Stop` and flight exit remove multiplayer state cleanly.
 - [ ] Build once **without** `JNO_MULTIPLAYER_DEV_REMOTE_DEBUGGER`; confirm the remote helper is excluded.
+- [ ] Change the main craft in flight, then confirm that the XML hash/refresh path stays silent while unchanged and queues exactly one updated XML payload after a real XML-visible change.
 - [ ] Build once **with** `JNO_MULTIPLAYER_DEV_REMOTE_DEBUGGER` only if the development remote helper is deliberately needed.
 
 ## Connectivity track — required before easy external testing
@@ -117,6 +119,7 @@ These require another Juno participant. A virtual LAN can satisfy this developme
 | Host/client `MP.Stop` and flight exit | Writers, sockets, telemetry, and remote proxies clean up. |
 | UDP loss / pause | Interpolation remains stable; extrapolation stays bounded; stale state follows policy. |
 | UDP source-port rebind | Authenticated same-IP session continues; changed IP is rejected. |
+| Main-craft XML refresh | A staging or XML-visible part change replaces the other player's main kinematic proxy, retains a sensible visible transform, and resumes normal UDP movement. Detached debris does not appear as a separate remote craft. |
 | Three or more clients | Relay scaling and interest/batching behavior stay within bandwidth and frame budgets. |
 
 ## Explicit non-goals for the first playable build
