@@ -5,6 +5,7 @@ namespace Assets.Scripts.Multiplayer
     using ModApi.Flight.Events;
     using Assets.Scripts.Flight;
     using Assets.Scripts.Flight.Sim;
+    using Assets.Scripts.Multiplayer.CraftData;
     using Assets.Scripts.Threading;
     using UnityEngine;
 
@@ -20,6 +21,12 @@ namespace Assets.Scripts.Multiplayer
         private bool _pendingHostStart;
         private string _pendingJoinHost;
         private int _pendingStartPort;
+
+        // XML is checked on the game thread. This does not write to disk; it prevents
+        // unnecessary TCP XML messages and remote proxy replacement when nothing changed.
+        private const float CraftXmlHashPollSeconds = 1.0f;
+        private float _nextCraftXmlHashPollTime;
+        private string _lastLocalCraftXmlHash;
 
         public static void EnsureCreated()
         {
@@ -66,7 +73,11 @@ namespace Assets.Scripts.Multiplayer
             ServerConnection.PumpClock();
             ClientConnection.PumpTelemetry(Time.deltaTime);
 
-            // 5. Observe scene transitions, then start only after Juno has built a local craft.
+            // 5. Check whether the one locally launched craft changed before sending a
+            // replacement XML payload. This is intentionally periodic rather than physics-based.
+            PollLocalCraftXmlForChanges();
+
+            // 6. Observe scene transitions, then start only after Juno has built a local craft.
             ObserveFlightScene();
             TryStartPendingSessionWhenFlightReady();
         }
@@ -153,6 +164,58 @@ namespace Assets.Scripts.Multiplayer
             _pendingStartPort = 0;
         }
 
+        /// <summary>
+        /// Periodically hashes the main locally launched craft XML. A changed hash causes one
+        /// reliable TCP XML update; unchanged XML causes no network message or proxy rebuild.
+        /// Detached debris is intentionally outside this first implementation's scope.
+        /// </summary>
+        private void PollLocalCraftXmlForChanges()
+        {
+            bool hosting = ServerConnection.IsHosting;
+            bool connected = ClientConnection.IsConnected;
+            if (!hosting && !connected)
+            {
+                _lastLocalCraftXmlHash = null;
+                _nextCraftXmlHashPollTime = 0f;
+                return;
+            }
+
+            if (Time.unscaledTime < _nextCraftXmlHashPollTime)
+            {
+                return;
+            }
+
+            _nextCraftXmlHashPollTime = Time.unscaledTime + CraftXmlHashPollSeconds;
+            if (!SendCraftData.TryGetLocalCraftXmlCompressedAndHashOnGameThread(
+                    out string compressedXml,
+                    out string contentHash))
+            {
+                return;
+            }
+
+            // The initial handshake already sends a complete craft snapshot. Establishing this
+            // baseline prevents an immediate duplicate update right after joining or hosting.
+            if (string.IsNullOrEmpty(_lastLocalCraftXmlHash))
+            {
+                _lastLocalCraftXmlHash = contentHash;
+                return;
+            }
+
+            if (string.Equals(_lastLocalCraftXmlHash, contentHash, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            bool queued = hosting
+                ? ServerConnection.UpdateHostCraftXmlOnGameThread(compressedXml)
+                : ClientConnection.QueueLocalCraftXmlUpdateOnGameThread(compressedXml);
+            if (queued)
+            {
+                _lastLocalCraftXmlHash = contentHash;
+                Mod.Log("[MultiplayerTelemetryRuntime] Local craft XML changed; queued refresh.");
+            }
+        }
+
         private static void RegisterFlightReadyLocalCraft()
         {
             int localClientId = ServerConnection.IsHosting
@@ -221,6 +284,8 @@ namespace Assets.Scripts.Multiplayer
             try
             {
                 ClearPendingStart();
+                _lastLocalCraftXmlHash = null;
+                _nextCraftXmlHashPollTime = 0f;
 
                 // Discard old spawn and proxy work before shutting down. Otherwise it can run
                 // after cleanup and recreate a remote proxy in the next frame or scene.

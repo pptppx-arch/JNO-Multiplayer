@@ -156,24 +156,20 @@ namespace Assets.Scripts.Multiplayer
         {
             try
             {
-                if (metadata.StartsWith("SPAWN_CRAFT:"))
+                if (TryParseRemoteCraftMessage(metadata, out int remoteClientId))
                 {
                     if (_state != ClientConnectionState.Accepted
                         && _state != ClientConnectionState.CraftQueued)
                     {
-                        Mod.LogWarning("[ClientConnection] Rejected SPAWN_CRAFT before CONNECT_ACCEPTED.");
+                        Mod.LogWarning("[ClientConnection] Rejected remote craft XML before CONNECT_ACCEPTED.");
                         Disconnect();
                         return;
                     }
 
-                    if (int.TryParse(
-                            metadata.Substring("SPAWN_CRAFT:".Length),
-                            out int remoteClientId)
-                        && remoteClientId >= 0
-                        && remoteClientId != LocalClientId)
+                    if (remoteClientId >= 0 && remoteClientId != LocalClientId)
                     {
                         // XML parsing/decompression stays in this path. The actual Juno
-                        // spawn is queued and completed by MultiplayerThread.Pump().
+                        // spawn or replacement is queued for MultiplayerThread.Pump().
                         await ReceiveCraftData.ProcessAndSpawnAsync(remoteClientId, data);
                     }
 
@@ -282,6 +278,32 @@ namespace Assets.Scripts.Multiplayer
 
             return Task.CompletedTask;
         }
+        /// <summary>
+        /// Queues a replacement XML payload for this client's one locally launched craft.
+        /// The serialized TCP writer preserves ordering after the initial CLIENT_CRAFT_DATA
+        /// frame, so an early refresh cannot overtake the handshake craft payload.
+        /// </summary>
+        public static bool QueueLocalCraftXmlUpdateOnGameThread(string compressedXml)
+        {
+            if (string.IsNullOrEmpty(compressedXml)
+                || LocalClientId < 0
+                || _state != ClientConnectionState.CraftQueued
+                || ActiveClient == null
+                || !ActiveClient.Connected
+                || _outboundWriter == null)
+            {
+                return false;
+            }
+
+            if (!_outboundWriter.Enqueue(compressedXml, "CLIENT_CRAFT_UPDATE"))
+            {
+                Mod.LogWarning("[ClientConnection] Could not queue refreshed craft XML.");
+                return false;
+            }
+
+            Mod.Log("[ClientConnection] Queued refreshed local craft XML.");
+            return true;
+        }
         #endregion
 
         #region Helper methods
@@ -362,6 +384,30 @@ namespace Assets.Scripts.Multiplayer
 
             _clockSynchronizer.ObserveRoundTrip(requestTimestamp, serverTick, serverTickRate);
             return true;
+        }
+
+        private static bool TryParseRemoteCraftMessage(string metadata, out int remoteClientId)
+        {
+            remoteClientId = -1;
+            if (string.IsNullOrEmpty(metadata)) return false;
+
+            const string spawnPrefix = "SPAWN_CRAFT:";
+            const string updatePrefix = "UPDATE_CRAFT:";
+            string idText;
+            if (metadata.StartsWith(spawnPrefix, StringComparison.Ordinal))
+            {
+                idText = metadata.Substring(spawnPrefix.Length);
+            }
+            else if (metadata.StartsWith(updatePrefix, StringComparison.Ordinal))
+            {
+                idText = metadata.Substring(updatePrefix.Length);
+            }
+            else
+            {
+                return false;
+            }
+
+            return int.TryParse(idText, out remoteClientId);
         }
 
         private static IPAddress ResolveHostAddress(string host)

@@ -291,6 +291,10 @@ namespace Assets.Scripts.Multiplayer
                                 await HandleClientCraftDataAsync(client, data);
                                 break;
 
+                            case "CLIENT_CRAFT_UPDATE":
+                                await HandleClientCraftUpdateAsync(client, data);
+                                break;
+
                             case "CLOCK_SYNC_REQUEST":
                                 await HandleClockSyncRequestAsync(client, data);
                                 break;
@@ -496,6 +500,72 @@ namespace Assets.Scripts.Multiplayer
 
             joiningSession.State = ClientSessionState.Active;
             SendDataToClients(data, $"SPAWN_CRAFT:{clientId}", excludeClientId: clientId);
+        }
+        private static async Task HandleClientCraftUpdateAsync(TcpClient client, string data)
+        {
+            ClientSession session = FindSession(client);
+            if (session == null
+                || session.State != ClientSessionState.Active
+                || string.IsNullOrEmpty(data))
+            {
+                Mod.LogWarning("[ServerHost] Rejected CLIENT_CRAFT_UPDATE outside the active session state.");
+                client.Close();
+                return;
+            }
+
+            int clientId = session.Id;
+
+            // XML parsing/decompression may run here, but the actual proxy replacement runs
+            // later through MultiplayerThread.Pump() on the Juno game thread.
+            CraftNode refreshedProxy = await ReceiveCraftData.ProcessAndSpawnAsync(clientId, data);
+            if (refreshedProxy == null || !_isHosting || !client.Connected)
+            {
+                Mod.LogWarning($"[ServerHost] Did not complete craft XML refresh for Client ID {clientId}.");
+                return;
+            }
+
+            lock (Sessions)
+            {
+                // Do not retain malformed XML for later join replay. The successful spawn
+                // above proves that this payload passed the normal bounded XML receive path.
+                ClientSession activeSession = Sessions.Find(s => s.Client == client);
+                if (activeSession == null || activeSession.State != ClientSessionState.Active)
+                {
+                    return;
+                }
+
+                activeSession.CraftXml = data;
+            }
+
+            SendDataToClients(data, $"UPDATE_CRAFT:{clientId}", excludeClientId: clientId);
+            Mod.Log($"[ServerHost] Relayed refreshed craft XML for Client ID {clientId}.");
+        }
+
+        /// <summary>
+        /// Updates the host's cached main-craft XML and tells every active remote client to
+        /// replace its kinematic host proxy. Call only on the Juno game thread.
+        /// </summary>
+        public static bool UpdateHostCraftXmlOnGameThread(string compressedXml)
+        {
+            if (!_isHosting || string.IsNullOrEmpty(compressedXml))
+            {
+                return false;
+            }
+
+            lock (Sessions)
+            {
+                ClientSession hostSession = Sessions.Find(s => s.Id == HostClientId);
+                if (hostSession == null)
+                {
+                    return false;
+                }
+
+                hostSession.CraftXml = compressedXml;
+            }
+
+            SendDataToClients(compressedXml, $"UPDATE_CRAFT:{HostClientId}");
+            Mod.Log("[ServerHost] Broadcast refreshed host craft XML.");
+            return true;
         }
         #endregion
 

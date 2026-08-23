@@ -64,6 +64,19 @@ namespace Assets.Scripts.Multiplayer.CraftData
                     return null;
                 }
 
+                // Reuse the old proxy pose during an XML replacement. The following UDP
+                // telemetry pump then continues from the already-visible craft position rather
+                // than lerping a newly spawned proxy from the temporary origin.
+                Rigidbody previousBody = null;
+                CraftNode previousCraft = CraftRegistry.GetCraft(clientId);
+                if (previousCraft is ICraftDebris previousDebris)
+                {
+                    previousBody = previousDebris.RigidBody;
+                }
+
+                Vector3 previousPosition = previousBody == null ? Vector3.zero : previousBody.position;
+                Quaternion previousRotation = previousBody == null ? Quaternion.identity : previousBody.rotation;
+
                 ICraftDebris remoteDebris = remoteCraftNode as ICraftDebris;
                 Rigidbody remoteBody = remoteDebris == null ? null : remoteDebris.RigidBody;
                 if (remoteBody != null)
@@ -71,6 +84,12 @@ namespace Assets.Scripts.Multiplayer.CraftData
                     remoteBody.isKinematic = true;
                     remoteBody.velocity = Vector3.zero;
                     remoteBody.angularVelocity = Vector3.zero;
+
+                    if (previousBody != null)
+                    {
+                        remoteBody.position = previousPosition;
+                        remoteBody.rotation = previousRotation;
+                    }
                 }
                 else
                 {
